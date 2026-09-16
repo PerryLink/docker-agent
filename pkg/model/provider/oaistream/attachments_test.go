@@ -1,6 +1,7 @@
 package oaistream
 
 import (
+	"bytes"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -36,8 +37,7 @@ func TestConvertDocument_StrategyB64_Image(t *testing.T) {
 
 	// Data URI must embed the base64-encoded payload.
 	wantB64 := base64.StdEncoding.EncodeToString(minJPEG)
-	assert.Contains(t, parts[0].OfImageURL.ImageURL.URL, "data:image/jpeg;base64,")
-	assert.Contains(t, parts[0].OfImageURL.ImageURL.URL, wantB64)
+	assert.Equal(t, "data:image/jpeg;base64,"+wantB64, parts[0].OfImageURL.ImageURL.URL)
 }
 
 // TestConvertDocument_StrategyB64_PDF verifies that a PDF document with
@@ -61,8 +61,7 @@ func TestConvertDocument_StrategyB64_PDF(t *testing.T) {
 
 	wantB64 := base64.StdEncoding.EncodeToString(pdf)
 	assert.Equal(t, "spec.pdf", parts[0].OfFile.File.Filename.Value)
-	assert.Contains(t, parts[0].OfFile.File.FileData.Value, "data:application/pdf;base64,")
-	assert.Contains(t, parts[0].OfFile.File.FileData.Value, wantB64)
+	assert.Equal(t, "data:application/pdf;base64,"+wantB64, parts[0].OfFile.File.FileData.Value)
 }
 
 // TestConvertDocument_StrategyB64_PDFDropped verifies that a PDF is dropped when
@@ -235,4 +234,47 @@ func TestConvertDocument_Drop_NoContent(t *testing.T) {
 	parts, err := convertDocumentWithCaps(t.Context(), doc, modelinfo.ModelCapabilities{})
 	require.NoError(t, err)
 	assert.Nil(t, parts, "should be dropped when no inline content")
+}
+
+func TestDataURI(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		mimeType string
+		data     []byte
+		want     string
+	}{
+		{"nil", "", nil, "data:;base64,"},
+		{"empty", "image/png", []byte{}, "data:image/png;base64,"},
+		{"one byte", "image/png", []byte{0xff}, "data:image/png;base64,/w=="},
+		{"two bytes", "image/png", []byte{0xff, 0x00}, "data:image/png;base64,/wA="},
+		{"three bytes", "image/png", []byte{0xff, 0x00, 0x01}, "data:image/png;base64,/wAB"},
+		{"mixed case", "image/PNG", []byte{0xff}, "data:image/PNG;base64,/w=="},
+		{"literal MIME", "image/%s", []byte{0xff}, "data:image/%s;base64,/w=="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, dataURI(tc.mimeType, tc.data))
+		})
+	}
+}
+
+func BenchmarkDataURI(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		size int
+	}{
+		{"1KiB", 1 << 10},
+		{"1MiB", 1 << 20},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			data := bytes.Repeat([]byte{0xff}, tc.size)
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			for b.Loop() {
+				_ = dataURI("image/png", data)
+			}
+		})
+	}
 }
