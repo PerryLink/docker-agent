@@ -19,8 +19,169 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/model/provider/providers"
 	"github.com/docker/docker-agent/pkg/session"
 )
+
+func TestEvaluatePreflightsAgentConfig(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name       string
+		agent      string
+		wantErr    string
+		createFile bool
+	}{
+		{
+			name:    "missing config",
+			wantErr: "loading agent: reading config file agent.yaml",
+		},
+		{
+			name:       "invalid readable config",
+			agent:      "agents: {}\n",
+			wantErr:    "loading agent: at least one agent must be configured",
+			createFile: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			agentPath := filepath.Join(tmpDir, "agent.yaml")
+			if tt.createFile {
+				require.NoError(t, os.WriteFile(agentPath, []byte(tt.agent), 0o600))
+			}
+			evalsDir := filepath.Join(tmpDir, "evals")
+			require.NoError(t, os.Mkdir(evalsDir, 0o755))
+
+			runConfig := &config.RuntimeConfig{
+				EnvProviderForTests: environment.NewNoEnvProvider(),
+				ProviderRegistry:    providers.NewDefaultRegistry(),
+			}
+			run, err := Evaluate(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}, false, "test", runConfig, Config{
+				AgentFilename: agentPath,
+				EvalsDir:      evalsDir,
+				JudgeModel:    "anthropic/claude-opus-5",
+				Concurrency:   1,
+			})
+
+			require.Error(t, err)
+			assert.Nil(t, run)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.NotContains(t, err.Error(), "ANTHROPIC_API_KEY")
+		})
+	}
+}
+
+func TestEvaluateSkipsUnusedJudge(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake container runtime executable is a POSIX shell script")
+	}
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name            string
+		evalSession     string
+		expectedResults int
+	}{
+		{name: "empty evaluation directory"},
+		{
+			name:            "assertion-only session",
+			expectedResults: 1,
+			evalSession: `{
+				"evals": {
+					"relevance": [],
+					"assertions": [{"name": "response", "type": "contains", "value": "ok"}]
+				}
+			}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			agentPath := filepath.Join(tmpDir, "agent.yaml")
+			require.NoError(t, os.WriteFile(agentPath, []byte(`agents:
+  root:
+    model: openai/gpt-5
+`), 0o600))
+
+			evalsDir := filepath.Join(tmpDir, "evals")
+			require.NoError(t, os.Mkdir(evalsDir, 0o755))
+			if tt.evalSession != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(evalsDir, "session.json"), []byte(tt.evalSession), 0o600))
+			}
+
+			fakeRuntime := filepath.Join(tmpDir, "fake-runtime")
+			writeFakeContainerRuntime(t, fakeRuntime, filepath.Join(tmpDir, "args"), `{"type":"agent_choice","content":"ok"}`)
+
+			runConfig := &config.RuntimeConfig{
+				EnvProviderForTests: environment.NewNoEnvProvider(),
+				ProviderRegistry:    providers.NewDefaultRegistry(),
+			}
+			run, err := Evaluate(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}, false, "test", runConfig, Config{
+				AgentFilename:    agentPath,
+				EvalsDir:         evalsDir,
+				JudgeModel:       "anthropic/claude-opus-5",
+				Concurrency:      1,
+				ContainerRuntime: fakeRuntime,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, run)
+			assert.Len(t, run.Results, tt.expectedResults)
+		})
+	}
+}
+
+func TestRunnerRequiresJudgeForRelevance(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	evalsDir := filepath.Join(tmpDir, "evals")
+	require.NoError(t, os.Mkdir(evalsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(evalsDir, "session.json"), []byte(`{
+		"evals": {"relevance": ["response is relevant"]}
+	}`), 0o600))
+
+	runner := newRunner(
+		config.NewFileSource(filepath.Join(tmpDir, "agent.yaml")),
+		&config.RuntimeConfig{EnvProviderForTests: environment.NewNoEnvProvider()},
+		Config{EvalsDir: evalsDir, Concurrency: 1},
+	)
+	_, err := runner.Run(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	require.EqualError(t, err, "some evaluations have relevance criteria but no judge model is configured (use --judge-model)")
+}
+
+func TestRunnerConfiguredJudgeCreationFailure(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	evalsDir := filepath.Join(tmpDir, "evals")
+	require.NoError(t, os.Mkdir(evalsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(evalsDir, "session.json"), []byte(`{
+		"evals": {"relevance": ["response is relevant"]}
+	}`), 0o600))
+
+	runner := newRunner(
+		config.NewFileSource(filepath.Join(tmpDir, "agent.yaml")),
+		&config.RuntimeConfig{
+			EnvProviderForTests: environment.NewNoEnvProvider(),
+			ProviderRegistry:    providers.NewDefaultRegistry(),
+		},
+		Config{
+			EvalsDir:    evalsDir,
+			JudgeModel:  "anthropic/claude-opus-5",
+			Concurrency: 1,
+		},
+	)
+	_, err := runner.Run(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating judge model")
+	assert.Contains(t, err.Error(), "ANTHROPIC_API_KEY environment variable is required")
+}
 
 func TestToolCallF1Score(t *testing.T) {
 	t.Parallel()
@@ -993,7 +1154,6 @@ func TestRunDockerAgentInContainerCancelInterruptsDocker(t *testing.T) {
 	runner := newRunner(
 		config.NewFileSource(filepath.Join(tmpDir, "agent.yaml")),
 		&config.RuntimeConfig{EnvProviderForTests: environment.NewNoEnvProvider()},
-		nil,
 		Config{},
 	)
 
@@ -1092,7 +1252,6 @@ func TestRunDockerAgentInContainerUsesConfiguredRuntime(t *testing.T) {
 	runner := newRunner(
 		config.NewFileSource(filepath.Join(tmpDir, "agent.yaml")),
 		&config.RuntimeConfig{EnvProviderForTests: environment.NewNoEnvProvider()},
-		nil,
 		Config{ContainerRuntime: fakeRuntime},
 	)
 
@@ -1127,7 +1286,6 @@ func TestBuildEvalImageUsesConfiguredRuntime(t *testing.T) {
 	runner := newRunner(
 		config.NewFileSource(filepath.Join(tmpDir, "agent.yaml")),
 		&config.RuntimeConfig{EnvProviderForTests: environment.NewNoEnvProvider()},
-		nil,
 		Config{EvalsDir: evalsDir, ContainerRuntime: fakeRuntime},
 	)
 

@@ -48,15 +48,10 @@ type Runner struct {
 }
 
 // newRunner creates a new evaluation runner.
-func newRunner(agentSource config.Source, runConfig *config.RuntimeConfig, judgeModel provider.Provider, cfg Config) *Runner {
-	var judge *Judge
-	if judgeModel != nil {
-		judge = NewJudge(judgeModel, cfg.Concurrency)
-	}
+func newRunner(agentSource config.Source, runConfig *config.RuntimeConfig, cfg Config) *Runner {
 	return &Runner{
 		Config:      cfg,
 		agentSource: agentSource,
-		judge:       judge,
 		runConfig:   runConfig,
 		imageCache:  make(map[imageKey]string),
 	}
@@ -70,14 +65,11 @@ func Evaluate(ctx context.Context, ttyOut, out io.Writer, isTTY bool, runName st
 	if err != nil {
 		return nil, fmt.Errorf("resolving agent: %w", err)
 	}
-
-	// Create judge model provider for relevance checking
-	judgeModel, err := createJudgeModel(ctx, cfg.JudgeModel, runConfig)
-	if err != nil {
-		return nil, err
+	if _, err := config.Load(ctx, agentSource, config.WithFlavors(runConfig.Flavors...)); err != nil {
+		return nil, fmt.Errorf("loading agent: %w", err)
 	}
 
-	runner := newRunner(agentSource, runConfig, judgeModel, cfg)
+	runner := newRunner(agentSource, runConfig, cfg)
 
 	fmt.Fprintf(out, "Evaluation run: %s\n", runName)
 
@@ -127,7 +119,14 @@ func (r *Runner) Run(ctx context.Context, ttyOut, out io.Writer, isTTY bool) ([]
 	// instead of silently producing zero-relevance results.
 	if needsJudge(evals) {
 		if r.judge == nil {
-			return nil, errors.New("some evaluations have relevance criteria but no judge model is configured (use --judge-model)")
+			judgeModel, err := createJudgeModel(ctx, r.JudgeModel, r.runConfig)
+			if err != nil {
+				return nil, err
+			}
+			if judgeModel == nil {
+				return nil, errors.New("some evaluations have relevance criteria but no judge model is configured (use --judge-model)")
+			}
+			r.judge = NewJudge(judgeModel, r.Concurrency)
 		}
 		fmt.Fprintln(out, "Validating judge model...")
 		if err := r.judge.Validate(ctx); err != nil {
