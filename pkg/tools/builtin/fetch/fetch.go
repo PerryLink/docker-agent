@@ -591,7 +591,7 @@ func WithExpander(expander *js.Expander) ToolOption {
 
 func (t *ToolSet) Instructions() string {
 	var b strings.Builder
-	b.WriteString("## Fetch Tool\n\nFetch content from HTTP/HTTPS URLs. Supports multiple URLs per call, output format selection (text, markdown, html), and respects robots.txt.")
+	b.WriteString("## Fetch Tool\n\nFetch HTTP/HTTPS URLs; respects robots.txt.")
 	if d := t.handler.allowedDomains; len(d) > 0 {
 		fmt.Fprintf(&b, "\n\nThis tool is restricted to these domains (and any subdomain): %s. Other hosts are rejected without a network call.", strings.Join(d, ", "))
 	}
@@ -606,7 +606,7 @@ func (t *ToolSet) Tools(context.Context) ([]tools.Tool, error) {
 		{
 			Name:        ToolNameFetch,
 			Category:    "fetch",
-			Description: "Fetch content from one or more HTTP/HTTPS URLs. Returns the response body and metadata.",
+			Description: "Fetch HTTP/HTTPS URLs; return response bodies and metadata.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -615,12 +615,12 @@ func (t *ToolSet) Tools(context.Context) ([]tools.Tool, error) {
 						"items": map[string]any{
 							"type": "string",
 						},
-						"description": "Array of URLs to fetch",
+						"description": "URLs to fetch",
 						"minItems":    1,
 					},
 					"format": map[string]any{
 						"type":        "string",
-						"description": "The format to return the content in (text, markdown, or html)",
+						"description": "Output format",
 						"enum":        []string{"text", "markdown", "html"},
 					},
 					"timeout": map[string]any{

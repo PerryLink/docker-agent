@@ -64,7 +64,7 @@ func TestFetchTool_Tools(t *testing.T) {
 	"type": "object",
 	"properties": {
 		"format": {
-			"description": "The format to return the content in (text, markdown, or html)",
+			"description": "Output format",
 			"enum": [
 				"text",
 				"markdown",
@@ -79,7 +79,7 @@ func TestFetchTool_Tools(t *testing.T) {
 			"type": "integer"
 		},
 		"urls": {
-			"description": "Array of URLs to fetch",
+			"description": "URLs to fetch",
 			"items": {
 				"type": "string"
 			},
@@ -100,7 +100,7 @@ func TestFetchTool_Instructions(t *testing.T) {
 
 	instructions := tools.GetInstructions(tool)
 
-	assert.Contains(t, instructions, "Fetch Tool")
+	assert.Equal(t, "## Fetch Tool\n\nFetch HTTP/HTTPS URLs; respects robots.txt.", instructions)
 }
 
 func TestFetchTool_StartStop(t *testing.T) {
