@@ -742,8 +742,7 @@ func TestTransferTask_RetriesIdleStreamOnce(t *testing.T) {
 		<-stalled.recvStarted
 		time.Sleep(defaultStreamIdleTimeout - time.Nanosecond) //nolint:forbidigo // Advances synthetic time to the boundary.
 		assert.Equal(t, 1, primary.callCount(), "retry must not start before the five-minute boundary")
-		time.Sleep(time.Nanosecond) //nolint:forbidigo // Crosses the synthetic timeout boundary.
-		synctest.Wait()
+		synctest.Sleep(time.Nanosecond) // Crosses the synthetic timeout boundary.
 		outcome := <-resultCh
 		result, err := outcome.result, outcome.err
 
