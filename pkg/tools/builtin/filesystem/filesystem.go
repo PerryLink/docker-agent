@@ -1440,8 +1440,9 @@ func (t *ToolSet) handleSearchFilesContent(ctx context.Context, args SearchFiles
 			return nil
 		}
 
-		lines := strings.Split(string(content), "\n")
-		for lineNum, line := range lines {
+		lineNum := 0
+		for line := range strings.SplitSeq(string(content), "\n") {
+			lineNum++
 			var matched bool
 			var matchStart, matchEnd int
 
@@ -1481,7 +1482,7 @@ func (t *ToolSet) handleSearchFilesContent(ctx context.Context, args SearchFiles
 				if matchCount > 0 {
 					out.WriteByte('\n')
 				}
-				fmt.Fprintf(&out, "%s:%d:%d: %s", path, lineNum+1, matchStart+1, preview)
+				fmt.Fprintf(&out, "%s:%d:%d: %s", path, lineNum, matchStart+1, preview)
 				matchCount++
 				if out.Len() >= maxSearchOutputBytes {
 					truncated = true
