@@ -61,13 +61,18 @@ func (m *streamingMotionModel) View() tea.View {
 	return v
 }
 
+// settleWindow must clear tea's ~16.7ms (60fps) tick period: under -race
+// with the suite's package parallelism, the render ticker can lag several
+// ticks, so a short window risks calling the program stable before a
+// pending composition is flushed. 300ms (~18 ticks) gives it room to catch up.
 func waitForProgramQuiescence(t *testing.T, model *streamingMotionModel, writer *wallClockCountingWriter) {
 	t.Helper()
+	const settleWindow = 300 * time.Millisecond
 	lastViews, lastCompositions, lastWrites := model.views.Load(), model.compositions.Load(), writer.writes.Load()
 	stableSince := time.Now()
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
-	timeout := time.NewTimer(5 * time.Second)
+	timeout := time.NewTimer(20 * time.Second)
 	defer timeout.Stop()
 	for {
 		select {
@@ -77,7 +82,7 @@ func waitForProgramQuiescence(t *testing.T, model *streamingMotionModel, writer 
 				lastViews, lastCompositions, lastWrites = views, compositions, writes
 				stableSince = time.Now()
 			}
-			if time.Since(stableSince) >= 50*time.Millisecond {
+			if time.Since(stableSince) >= settleWindow {
 				return
 			}
 		case <-timeout.C:
