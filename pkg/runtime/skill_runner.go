@@ -130,24 +130,22 @@ func (r *LocalRuntime) runSkillFork(ctx context.Context, sess *session.Session, 
 	// session), pin the child to the same agent so RunStream resolves it
 	// as the pinned caller instead of the shared current agent.
 	return r.runForwarding(ctx, sess, evts, delegationRequest{
-		SubSessionConfig: SubSessionConfig{
-			Task:                prepared.Task,
-			SystemMessage:       skills.BuildSkillSystemMessage(prepared, sess.AttachedFilesSnapshot()),
-			ImplicitUserMessage: skills.BuildSkillUserMessage(prepared),
-			AgentName:           ca,
-			Title:               "Skill: " + prepared.SkillName,
-			ToolsApproved:       sess.IsToolsApproved(),
-			SafetyPolicy:        sess.GetSafetyPolicy(),
-			Permissions:         sess.ClonePermissions(),
-			NonInteractive:      sess.NonInteractive,
-			PinAgent:            sess.AgentName != "",
-			ExcludedTools:       []string{skills.ToolNameRunSkill},
-			AllowedTools:        prepared.AllowedTools,
-			ExtraToolSets:       prepared.ToolSets,
-			// A fork skill's answer is free-form text consumed by the calling
-			// agent, not the agent's schema-constrained final output, so the
-			// child is exempt from tool-mode structured-output enforcement.
-			DisableStructuredOutput: true,
-		},
+		Task:                prepared.Task,
+		SystemMessage:       skills.BuildSkillSystemMessage(prepared, sess.AttachedFilesSnapshot()),
+		ImplicitUserMessage: skills.BuildSkillUserMessage(prepared),
+		AgentName:           ca,
+		Title:               "Skill: " + prepared.SkillName,
+		ToolsApproved:       sess.IsToolsApproved(),
+		SafetyPolicy:        sess.GetSafetyPolicy(),
+		Permissions:         sess.ClonePermissions(),
+		NonInteractive:      sess.NonInteractive,
+		PinAgent:            sess.AgentName != "",
+		ExcludedTools:       []string{skills.ToolNameRunSkill},
+		AllowedTools:        prepared.AllowedTools,
+		ExtraToolSets:       prepared.ToolSets,
+		// A fork skill's answer is free-form text consumed by the calling
+		// agent, not the agent's schema-constrained final output, so the
+		// child is exempt from tool-mode structured-output enforcement.
+		DisableStructuredOutput: true,
 	})
 }

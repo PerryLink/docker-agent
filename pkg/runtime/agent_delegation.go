@@ -739,17 +739,15 @@ func (r *LocalRuntime) handleTaskTransfer(ctx context.Context, sess *session.Ses
 	defer span.End()
 
 	return r.runForwarding(ctx, sess, evts, delegationRequest{
-		SubSessionConfig: SubSessionConfig{
-			Task:              params.Task,
-			ExpectedOutput:    params.ExpectedOutput,
-			AgentName:         params.Agent,
-			Title:             "Transferred task",
-			ToolsApproved:     sess.IsToolsApproved(),
-			SafetyPolicy:      sess.GetSafetyPolicy(),
-			Permissions:       sess.ClonePermissions(),
-			NonInteractive:    sess.NonInteractive,
-			DelegationLineage: childLineage,
-		},
+		Task:                 params.Task,
+		ExpectedOutput:       params.ExpectedOutput,
+		AgentName:            params.Agent,
+		Title:                "Transferred task",
+		ToolsApproved:        sess.IsToolsApproved(),
+		SafetyPolicy:         sess.GetSafetyPolicy(),
+		Permissions:          sess.ClonePermissions(),
+		NonInteractive:       sess.NonInteractive,
+		DelegationLineage:    childLineage,
 		SwitchCurrentAgent:   true,
 		directNativeTransfer: true,
 	})

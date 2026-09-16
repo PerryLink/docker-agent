@@ -554,15 +554,13 @@ func TestRunForwarding_DoesNotBackPropagateApprovals(t *testing.T) {
 	// Child scope broader than the parent's, as if the user had clicked
 	// "approve all" / "always allow" inside the sub-session.
 	_, err = rt.runForwarding(t.Context(), parent, NewChannelSink(evts), delegationRequest{
-		SubSessionConfig: SubSessionConfig{
-			Task:          "find a book",
-			AgentName:     "librarian",
-			Title:         "Transferred task",
-			ToolsApproved: true,
-			Permissions: &session.PermissionsConfig{
-				Allow: []string{"exploit_tool"},
-				Deny:  []string{"dangerous_tool"},
-			},
+		Task:          "find a book",
+		AgentName:     "librarian",
+		Title:         "Transferred task",
+		ToolsApproved: true,
+		Permissions: &session.PermissionsConfig{
+			Allow: []string{"exploit_tool"},
+			Deny:  []string{"dangerous_tool"},
 		},
 		SwitchCurrentAgent: true,
 	})
@@ -848,7 +846,7 @@ func TestRunForwarding_DirectTransferOwnBudgetStopFailsAfterLifecycle(t *testing
 	result, err := rt.runForwarding(t.Context(), parent, EventSinkFunc(func(event Event) {
 		events = append(events, event)
 	}), delegationRequest{
-		SubSessionConfig:     SubSessionConfig{AgentName: "delegate"},
+		AgentName:            "delegate",
 		SwitchCurrentAgent:   true,
 		directNativeTransfer: true,
 	})
@@ -909,7 +907,7 @@ func TestRunForwarding_IgnoresMismatchedBudgetStop(t *testing.T) {
 			forwardedBudget = budgetEvent
 		}
 	}), delegationRequest{
-		SubSessionConfig:     SubSessionConfig{AgentName: "delegate"},
+		AgentName:            "delegate",
 		directNativeTransfer: true,
 	})
 	require.NoError(t, err)
@@ -952,7 +950,7 @@ func TestRunForwarding_CancellationCannotReturnStaleSuccess(t *testing.T) {
 	cancel()
 
 	result, err := rt.runForwarding(ctx, parent, EventSinkFunc(func(Event) {}), delegationRequest{
-		SubSessionConfig: SubSessionConfig{AgentName: "delegate"},
+		AgentName: "delegate",
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Nil(t, result)
