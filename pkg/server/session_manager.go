@@ -536,7 +536,7 @@ func (sm *SessionManager) GetSessionStatus(ctx context.Context, id string) (*api
 		Agent:        rs.runtime.CurrentAgentName(ctx),
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
-		NumMessages:  len(sess.GetAllMessages()),
+		NumMessages:  sess.AllMessageCount(),
 	}, nil
 }
 
