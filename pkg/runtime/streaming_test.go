@@ -464,8 +464,7 @@ func TestHandleStream_ProductionIdleTimeoutBoundary(t *testing.T) {
 			t.Fatalf("production idle timeout fired before five minutes: %v", err)
 		default:
 		}
-		time.Sleep(time.Nanosecond) //nolint:forbidigo // Crosses the synthetic timeout boundary.
-		synctest.Wait()
+		synctest.Sleep(time.Nanosecond) // Crosses the synthetic timeout boundary.
 		select {
 		case err := <-resultCh:
 			require.ErrorIs(t, err, errStreamIdle)
