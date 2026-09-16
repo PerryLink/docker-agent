@@ -207,6 +207,39 @@ func TestParseExternalAgentRef(t *testing.T) {
 	}
 }
 
+func TestExternalRefBaseName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  string
+		want string
+	}{
+		{"empty", "", ""},
+		{"bare name", "agent", "agent"},
+		{"path", "myorg/agent", "agent"},
+		{"tag", "myorg/agent:v1", "agent"},
+		{"registry port", "localhost:5000/myorg/agent", "agent"},
+		{"registry port and tag", "localhost:5000/myorg/agent:v1", "agent"},
+		{"digest", "myorg/agent@sha256:abc123", "agent"},
+		{"registry port and digest", "localhost:5000/myorg/agent@sha256:abc123", "agent"},
+		{"tag and digest", "myorg/agent:v1@sha256:abc123", "agent"},
+		{"last digest separator", "myorg/agent@other@sha256:abc123", "agent@other"},
+		{"last tag separator", "myorg/agent:v1:v2", "agent:v1"},
+		{"trailing slash", "myorg/", ""},
+		{"empty tag", "myorg/agent:", "agent"},
+		{"empty digest", "myorg/agent@", "agent"},
+		{"URL", "https://example.com/agent.yaml", "agent"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, externalRefBaseName(tt.ref))
+		})
+	}
+}
+
 func TestStableSourceKey(t *testing.T) {
 	t.Parallel()
 
