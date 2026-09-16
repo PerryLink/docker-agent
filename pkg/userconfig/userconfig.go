@@ -589,19 +589,25 @@ func (c *Config) marshal() ([]byte, error) {
 	return yaml.Marshal(c)
 }
 
+// updateMu keeps in-process writers from consuming the file-lock timeout while queued.
+var updateMu sync.Mutex
+
 // Update atomically applies mutate to the freshest on-disk configuration and
 // saves the result. An advisory file lock serializes the whole
 // load-mutate-save cycle against other docker-agent processes, so concurrent
 // writers cannot overwrite each other's changes. Returning an error from
-// mutate aborts the update and leaves the file untouched. When the lock
-// cannot be acquired the update proceeds unlocked (best effort) rather than
-// failing the save.
+// mutate aborts the update and leaves the file untouched. If the lock cannot
+// be acquired, Update returns an error without calling mutate or saving.
+// The mutate callback must not call Update.
 func Update(mutate func(*Config) error) error {
-	if release, err := acquireFileLock(Path() + ".lock"); err == nil {
-		defer release()
-	} else {
-		slog.Warn("Proceeding without config file lock", "error", err)
+	updateMu.Lock()
+	defer updateMu.Unlock()
+
+	release, err := acquireFileLock(Path() + ".lock")
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	cfg, err := Load()
 	if err != nil {
