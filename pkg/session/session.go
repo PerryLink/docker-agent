@@ -1289,13 +1289,30 @@ func (s *Session) GetLastUserMessages(n int) []string {
 }
 
 func (s *Session) getLastMessageContentByRole(role chat.MessageRole) string {
-	messages := s.GetAllMessages()
-	for _, message := range slices.Backward(messages) {
-		if message.Message.Role == role {
-			return strings.TrimSpace(message.Message.Content)
+	content, _ := s.lastMessageContentByRole(role)
+	return content
+}
+
+// lastMessageContentByRole walks items newest-first under RLock, mirroring
+// GetAllMessages' selection: a non-system message item contributes its own
+// message; a sub-session item is recursed into. The bool distinguishes a
+// blank match (stops the search) from no match.
+func (s *Session) lastMessageContentByRole(role chat.MessageRole) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range slices.Backward(s.Messages) {
+		switch {
+		case item.IsMessage() && item.Message.Message.Role != chat.MessageRoleSystem:
+			if item.Message.Message.Role == role {
+				return strings.TrimSpace(item.Message.Message.Content), true
+			}
+		case item.IsSubSession():
+			if content, ok := item.SubSession.lastMessageContentByRole(role); ok {
+				return content, true
+			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 // AddMessageUsageRecord appends a usage record for remote mode where messages aren't stored locally.
