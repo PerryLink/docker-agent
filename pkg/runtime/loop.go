@@ -96,7 +96,7 @@ func (r *LocalRuntime) drainAndEmitSteered(ctx context.Context, sess *session.Se
 	if len(steered) == 0 {
 		return steerResult{}
 	}
-	messageCountBefore := len(sess.OwnMessages())
+	messageCountBefore := sess.OwnMessageCount()
 	contents := make([]string, 0, len(steered))
 	for i, sm := range steered {
 		contents = append(contents, sm.Content)
@@ -953,7 +953,7 @@ func (r *LocalRuntime) runTurn(
 
 	// Record the message count before tool calls so we can
 	// measure how much content was added by tool results.
-	messageCountBeforeTools := len(sess.OwnMessages())
+	messageCountBeforeTools := sess.OwnMessageCount()
 
 	// Intercept internal structured-output calls before dispatch: they bypass
 	// approval and the user's tool hooks, and an exclusive valid call

@@ -1258,6 +1258,19 @@ func (s *Session) OwnMessages() []Message {
 	return messages
 }
 
+// OwnMessageCount returns len(OwnMessages()) without allocating a slice.
+func (s *Session) OwnMessageCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, item := range s.Messages {
+		if item.IsMessage() && item.Message.Message.Role != chat.MessageRoleSystem {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Session) GetLastAssistantMessageContent() string {
 	return s.getLastMessageContentByRole(chat.MessageRoleAssistant)
 }
