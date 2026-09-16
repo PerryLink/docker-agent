@@ -2374,6 +2374,11 @@
           "description": "HTTP timeout in seconds (valid for type 'fetch', 'api', and 'openapi'). Defaults to 30 seconds when omitted.",
           "minimum": 1
         },
+        "escape_html": {
+          "type": "boolean",
+          "description": "Restore legacy HTML escaping of <, > and & in multi-URL JSON results (only valid for type 'fetch'). Defaults to false to reduce token usage. Decoded content and single-URL results are unchanged.",
+          "default": false
+        },
         "allowed_domains": {
           "type": "array",
           "description": "Allow-list of domains the fetch tool is permitted to fetch (only valid for type 'fetch'). Patterns are case-insensitive. A bare host ('example.com') matches the apex AND any subdomain. A leading dot ('.example.com') or wildcard ('*.example.com') matches strict subdomains only. CIDR ranges ('10.0.0.0/8', '::1/128') match when the URL host parses as an IP inside the network. Mutually exclusive with 'blocked_domains'.",
