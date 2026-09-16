@@ -50,7 +50,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/hashicorp/hcl/v2 v2.24.0
+	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/junegunn/fzf v0.74.3
 	github.com/k3a/html2text v1.4.0
 	github.com/labstack/echo/v4 v4.15.4
