@@ -152,18 +152,13 @@ func externalRefBaseName(ref string) string {
 	}
 
 	// OCI reference: strip tag or digest, then take last path segment.
-	base := ref
-	if i := strings.LastIndex(base, "@"); i >= 0 {
-		base = base[:i]
+	base, _, _ := strings.CutLast(ref, "@")
+	// A colon before the last slash is a registry port, not a tag.
+	if before, after, found := strings.CutLast(base, ":"); found && !strings.Contains(after, "/") {
+		base = before
 	}
-	if i := strings.LastIndex(base, ":"); i >= 0 {
-		// Only strip if the colon is after the last slash (i.e. it's a tag, not a port).
-		if j := strings.LastIndex(base, "/"); j < i {
-			base = base[:i]
-		}
-	}
-	if i := strings.LastIndex(base, "/"); i >= 0 {
-		base = base[i+1:]
+	if _, after, found := strings.CutLast(base, "/"); found {
+		base = after
 	}
 	return base
 }
