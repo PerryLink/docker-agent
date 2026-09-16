@@ -1677,6 +1677,23 @@ func (s *Session) MessageCount() int {
 	return n
 }
 
+// AllMessageCount returns len(GetAllMessages()) without cloning messages.
+func (s *Session) AllMessageCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n := 0
+	for _, item := range s.Messages {
+		switch {
+		case item.IsMessage() && item.Message.Message.Role != chat.MessageRoleSystem:
+			n++
+		case item.IsSubSession():
+			n += item.SubSession.AllMessageCount()
+		}
+	}
+	return n
+}
+
 // ItemCount returns the total number of items in s.Messages — messages,
 // sub-sessions, summaries, and recorded errors alike. Unlike MessageCount,
 // it counts every item, matching what len(s.Messages) would return outside

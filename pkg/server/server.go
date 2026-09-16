@@ -275,7 +275,7 @@ func (s *Server) getSessions(c echo.Context) error {
 			ID:           sess.ID,
 			Title:        title,
 			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
-			NumMessages:  len(sess.GetAllMessages()),
+			NumMessages:  sess.AllMessageCount(),
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
 			WorkingDir:   sess.WorkingDir,
