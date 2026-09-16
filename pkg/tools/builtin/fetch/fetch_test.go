@@ -155,6 +155,57 @@ func TestFetch_Call_MultipleURLs(t *testing.T) {
 	assert.Equal(t, "Server 2", results[1].Body)
 }
 
+func TestFetch_Call_MultipleURLs_PreservesContent(t *testing.T) {
+	t.Parallel()
+
+	const html = `<p>A &amp; B</p>`
+	for _, tc := range []struct {
+		format string
+		body   string
+	}{
+		{format: "html", body: html},
+		{format: "markdown", body: "A & B"},
+		{format: "text", body: "A & B"},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			t.Parallel()
+
+			url := runHTTPServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/robots.txt" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				if r.URL.Path == "/missing" {
+					w.WriteHeader(http.StatusNotFound)
+				}
+				fmt.Fprint(w, html)
+			})
+			urls := []string{url + "/?a=1&b=2", url + "/missing", "invalid-url"}
+			tool := newFetchToolForTest()
+
+			result, err := tool.handler.CallTool(t.Context(), ToolArgs{URLs: urls, Format: tc.format})
+			require.NoError(t, err)
+			assert.False(t, result.IsError)
+
+			var results []Result
+			require.NoError(t, json.Unmarshal([]byte(result.Output), &results))
+			assert.Equal(t, []Result{
+				{URL: urls[0], StatusCode: 200, Status: "200 OK", ContentType: "text/html; charset=utf-8", ContentLength: len(tc.body), Body: tc.body},
+				{URL: urls[1], StatusCode: 404, Status: "404 Not Found", ContentType: "text/html; charset=utf-8", ContentLength: len(tc.body), Body: tc.body},
+				{URL: urls[2], Error: "invalid URL: missing scheme or host"},
+			}, results)
+
+			assert.Contains(t, result.Output, tc.body)
+			assert.Contains(t, result.Output, urls[0])
+			original, err := json.Marshal(results)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(original), result.Output)
+			assert.Less(t, len(result.Output), len(original))
+		})
+	}
+}
+
 func TestFetch_Call_InvalidURL(t *testing.T) {
 	t.Parallel()
 	tool := newFetchToolForTest()

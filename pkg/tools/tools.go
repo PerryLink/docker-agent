@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 
 	"github.com/docker/aijson"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -140,11 +141,14 @@ func ResultSuccess(output string) *ToolCallResult {
 // ResultJSON marshals v as JSON and returns it as a successful tool result.
 // If marshaling fails, it returns an error result.
 func ResultJSON(v any) *ToolCallResult {
-	data, err := json.Marshal(v)
-	if err != nil {
+	var b strings.Builder
+	encoder := json.NewEncoder(&b)
+	// Tool output is not embedded in HTML; escaping <, > and & wastes tokens.
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
 		return ResultError(err.Error())
 	}
-	return &ToolCallResult{Output: string(data)}
+	return ResultSuccess(strings.TrimSuffix(b.String(), "\n"))
 }
 
 type ToolType string
