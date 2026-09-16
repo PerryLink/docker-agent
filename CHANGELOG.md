@@ -3,6 +3,66 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.141.0] - 2026-09-16
+
+This release adds an opt-in shared plans sidebar to the TUI, delivers multiple performance improvements across session handling, tools, and filesystem operations, and fixes several bugs including lost user config updates and OpenCode session header handling.
+
+## What's New
+
+- Adds an opt-in shared plans sidebar to the TUI (`settings.layout.show_plans`), listing the five most recently updated shared plans with support for opening, refreshing, and browsing all plans
+
+## Improvements
+
+- Avoids HTML escaping in JSON tool results, reducing unnecessary escape sequences in LLM payloads
+- Trims redundant prompt text in the fetch tool
+- Fixes O(n²) string conversion in URL prefix scanning (`urldetect`)
+- Eliminates wasted `strings.Join` allocation in `scrollview.compose` for the two most common render paths
+- Replaces `strings.Split` with lazy `strings.SplitSeq` in `search_files_content` to avoid materializing full line slices (~9.5% allocation reduction)
+- Reduces attachment data URI allocations by replacing `fmt.Sprintf` with plain string concatenation
+- Adds `OwnMessageCount` to count session messages without cloning the full message slice
+- Adds `AllMessageCount` to count all messages across the session tree without cloning
+- Avoids cloning the session tree in last-message lookups (`getLastMessageContentByRole`)
+
+## Bug Fixes
+
+- Fixes sending of `x-opencode-session` header to OpenCode providers via a shared transport for all clients, gated on the host
+- Fixes plans sidebar reconciliation with upstream tab lifecycle in the TUI
+- Fixes lost user config updates after file-lock timeouts by serializing in-process `Update` calls with a mutex
+- Fixes eval agent validation to occur before judge setup, so missing or invalid agent configs fail early
+
+## Technical Changes
+
+- Warms PowerShell before hook tests on Windows to avoid cold-start overhead interfering with the 60-second hook timeout
+- Widens the program-quiescence settle window in TUI tests under `-race` to reduce flakiness
+- Records client lifetimes in `AGENTS.md` and points to the contributing guide
+- Documents `options.WithTokenSource` in the Go SDK guide
+- Trims comments in the OpenCode session transport, its tests, and the OpenCode gate/WebSocket fallback
+### Pull Requests
+
+- [#4190](https://github.com/docker/docker-agent/pull/4190) - fix: send x-opencode-session header to OpenCode providers
+- [#4197](https://github.com/docker/docker-agent/pull/4197) - docs: record client lifetimes in AGENTS.md and point at the contributing guide
+- [#4253](https://github.com/docker/docker-agent/pull/4253) - feat(tui): add an opt-in shared plans sidebar
+- [#4280](https://github.com/docker/docker-agent/pull/4280) - feat(provider): add request-time TokenSource authentication for OpenAI and Vertex AI
+- [#4298](https://github.com/docker/docker-agent/pull/4298) - chore: update docker-agent-action to v2.0.8
+- [#4301](https://github.com/docker/docker-agent/pull/4301) - docs: update CHANGELOG.md for v1.140.0
+- [#4302](https://github.com/docker/docker-agent/pull/4302) - test(tui): widen the program-quiescence settle window for -race
+- [#4304](https://github.com/docker/docker-agent/pull/4304) - chore: update docker-agent-action to v2.0.9
+- [#4306](https://github.com/docker/docker-agent/pull/4306) - test: warm PowerShell before hook tests on Windows
+- [#4307](https://github.com/docker/docker-agent/pull/4307) - test(tui): widen the program-quiescence settle window for -race
+- [#4308](https://github.com/docker/docker-agent/pull/4308) - docs: auto-update for merged PRs (2026-09-16)
+- [#4311](https://github.com/docker/docker-agent/pull/4311) - chore(deps): bump direct Go dependencies
+- [#4313](https://github.com/docker/docker-agent/pull/4313) - fix(eval): validate agent before judge setup
+- [#4314](https://github.com/docker/docker-agent/pull/4314) - perf(tools/fetch): avoid HTML escaping in JSON results and trim fetch prompt overhead
+- [#4315](https://github.com/docker/docker-agent/pull/4315) - perf(urldetect): avoid O(n²) string conversion in URL prefix scan
+- [#4316](https://github.com/docker/docker-agent/pull/4316) - perf(tui): avoid discarded strings.Join in scrollview.compose
+- [#4317](https://github.com/docker/docker-agent/pull/4317) - perf(filesystem): use strings.SplitSeq to avoid allocating line slice in search
+- [#4318](https://github.com/docker/docker-agent/pull/4318) - perf: reduce attachment data URI allocations
+- [#4319](https://github.com/docker/docker-agent/pull/4319) - perf(session): add OwnMessageCount to avoid cloning OwnMessages for a count
+- [#4320](https://github.com/docker/docker-agent/pull/4320) - perf(session): avoid cloning session tree in getLastMessageContentByRole
+- [#4321](https://github.com/docker/docker-agent/pull/4321) - perf(session): count messages without cloning session history
+- [#4322](https://github.com/docker/docker-agent/pull/4322) - fix(userconfig): prevent lost updates after lock timeouts
+
+
 ## [v1.140.0] - 2026-09-15
 
 This release adds file autocomplete to the lean TUI, fixes several tab and session management bugs, improves MCP callback safety under concurrent use, and introduces multiple new lint rules to enforce codebase consistency.
@@ -6318,3 +6378,5 @@ This release improves the terminal user interface with better error handling and
 [v1.139.0]: https://github.com/docker/docker-agent/releases/tag/v1.139.0
 
 [v1.140.0]: https://github.com/docker/docker-agent/releases/tag/v1.140.0
+
+[v1.141.0]: https://github.com/docker/docker-agent/releases/tag/v1.141.0
