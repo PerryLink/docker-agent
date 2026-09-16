@@ -46,6 +46,7 @@ type fetchHandler struct {
 	blockedDomains  []string
 	headers         map[string]string
 	allowPrivateIPs bool
+	escapeHTML      bool
 	expander        *js.Expander
 }
 
@@ -162,7 +163,7 @@ func (h *fetchHandler) CallTool(ctx context.Context, params ToolArgs) (*tools.To
 	}
 
 	// Multiple URLs - return structured results
-	return tools.ResultJSON(results), nil
+	return tools.ResultJSONWithOptions(results, tools.JSONResultOptions{EscapeHTML: h.escapeHTML}), nil
 }
 
 type Result struct {
@@ -514,6 +515,9 @@ func CreateToolSet(toolset latest.Toolset, runConfig *config.RuntimeConfig) (too
 	if toolset.AllowPrivateIPsEnabled() {
 		opts = append(opts, WithAllowPrivateIPs(true))
 	}
+	if toolset.EscapeHTML != nil {
+		opts = append(opts, WithEscapeHTML(*toolset.EscapeHTML))
+	}
 	opts = append(opts, WithHeaders(toolset.Headers))
 	expander := js.NewJsExpander(runConfig.EnvProvider())
 	opts = append(opts, WithExpander(expander))
@@ -580,6 +584,14 @@ func WithAllowPrivateIPs(allow bool) ToolOption {
 func WithHeaders(headers map[string]string) ToolOption {
 	return func(t *ToolSet) {
 		t.handler.headers = headers
+	}
+}
+
+// WithEscapeHTML controls legacy HTML escaping in multi-URL JSON results.
+// Single-URL results and fetched content are unaffected.
+func WithEscapeHTML(escape bool) ToolOption {
+	return func(t *ToolSet) {
+		t.handler.escapeHTML = escape
 	}
 }
 

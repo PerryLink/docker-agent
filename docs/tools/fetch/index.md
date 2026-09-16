@@ -30,6 +30,7 @@ toolsets:
 | Property            | Type          | Default | Description                                                                                                                                                                                                                                                                                                      |
 | ------------------- | ------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `timeout`           | int           | `30`    | Default request timeout in seconds (overridable per tool call).                                                                                                                                                                                                                                                  |
+| `escape_html`       | boolean       | `false` | Restore legacy HTML escaping of `<`, `>` and `&` in multi-URL JSON results. Decoded content is identical; single-URL results are unaffected. See [JSON output compatibility](#json-output-compatibility). |
 | `allowed_domains`   | array[string] | _none_  | Allow-list of hosts the tool may fetch. When set, every URL whose host is **not** in the list is rejected before any network call is made. Mutually exclusive with `blocked_domains`.                                                                                                                            |
 | `blocked_domains`   | array[string] | _none_  | Deny-list of hosts the tool must not fetch. URLs whose host matches one of these patterns are rejected before any network call (including `robots.txt`) is made. Mutually exclusive with `allowed_domains`.                                                                                                      |
 | `allow_private_ips` | boolean       | `false` | Opt in to dialling **non-public** IP addresses (loopback, RFC1918, link-local — including the cloud-metadata endpoint at `169.254.169.254` — multicast, and the unspecified address). Required to reach `localhost` / internal services. See [SSRF protection](#ssrf-protection-and-reaching-localhost) below. |
@@ -62,6 +63,24 @@ toolsets:
   - type: fetch
     timeout: 60
 ```
+
+### JSON output compatibility
+
+Multi-URL calls return a JSON array. By default, `<`, `>` and `&` are left
+unescaped to reduce token usage. Set `escape_html: true` to restore the previous
+encoding (`\u003c`, `\u003e`, `\u0026`) for consumers that need byte-for-byte
+compatibility with the tool's original JSON output:
+
+```yaml
+toolsets:
+  - type: fetch
+    escape_html: true
+```
+
+Both encodings are valid JSON with identical decoded content and metadata. This
+setting only changes JSON serialization, not requests, HTML-to-Markdown/text
+conversion, or single-URL output. It is a toolset setting, not a model-facing tool
+parameter. Raw HTML is still selected separately with `format: html`.
 
 ### Custom headers
 

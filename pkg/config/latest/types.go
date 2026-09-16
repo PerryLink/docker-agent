@@ -1692,6 +1692,10 @@ type Toolset struct {
 	// Defaults to 30 seconds when omitted.
 	Timeout int `json:"timeout,omitempty"`
 
+	// EscapeHTML restores legacy HTML escaping in fetch's multi-URL JSON results.
+	// Defaults to false; single-URL results are unaffected.
+	EscapeHTML *bool `json:"escape_html,omitempty" yaml:"escape_html,omitempty"`
+
 	// For the `fetch` tool - allow-list of domains the tool is permitted to fetch.
 	// A pattern matches the host exactly (case-insensitive) and any of its subdomains;
 	// e.g. "example.com" matches "example.com" and "docs.example.com" but not

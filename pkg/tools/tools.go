@@ -138,13 +138,23 @@ func ResultSuccess(output string) *ToolCallResult {
 	}
 }
 
-// ResultJSON marshals v as JSON and returns it as a successful tool result.
+// JSONResultOptions controls the encoding of JSON tool results.
+type JSONResultOptions struct {
+	// EscapeHTML restores json.Marshal's escaping of <, > and &.
+	EscapeHTML bool
+}
+
+// ResultJSON marshals v as JSON without HTML escaping to reduce token usage.
 // If marshaling fails, it returns an error result.
 func ResultJSON(v any) *ToolCallResult {
+	return ResultJSONWithOptions(v, JSONResultOptions{})
+}
+
+// ResultJSONWithOptions is ResultJSON with explicit encoding options.
+func ResultJSONWithOptions(v any, opts JSONResultOptions) *ToolCallResult {
 	var b strings.Builder
 	encoder := json.NewEncoder(&b)
-	// Tool output is not embedded in HTML; escaping <, > and & wastes tokens.
-	encoder.SetEscapeHTML(false)
+	encoder.SetEscapeHTML(opts.EscapeHTML)
 	if err := encoder.Encode(v); err != nil {
 		return ResultError(err.Error())
 	}

@@ -41,6 +41,11 @@ func TestResultJSON(t *testing.T) {
 			original, err := json.Marshal(tc.value)
 			require.NoError(t, err)
 			assert.JSONEq(t, string(original), result.Output)
+			assert.Equal(t, result, ResultJSONWithOptions(tc.value, JSONResultOptions{}))
+
+			legacy := ResultJSONWithOptions(tc.value, JSONResultOptions{EscapeHTML: true})
+			assert.False(t, legacy.IsError)
+			assert.Equal(t, string(original), legacy.Output)
 		})
 	}
 }
@@ -55,6 +60,7 @@ func TestResultJSON_Error(t *testing.T) {
 		result := ResultJSON(value)
 		assert.True(t, result.IsError)
 		assert.Equal(t, err.Error(), result.Output)
+		assert.Equal(t, result, ResultJSONWithOptions(value, JSONResultOptions{EscapeHTML: true}))
 	}
 }
 

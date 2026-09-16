@@ -319,6 +319,9 @@ func (t *Toolset) validate() error {
 	if err := validateNonEmptyEntries("blocked_servers", t.BlockedServers); err != nil {
 		return err
 	}
+	if t.EscapeHTML != nil && t.Type != "fetch" {
+		return errors.New("escape_html can only be used with type 'fetch'")
+	}
 	if len(t.AllowedDomains) > 0 && t.Type != "fetch" {
 		return errors.New("allowed_domains can only be used with type 'fetch'")
 	}

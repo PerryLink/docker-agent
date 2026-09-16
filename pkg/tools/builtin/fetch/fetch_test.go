@@ -160,14 +160,18 @@ func TestFetch_Call_MultipleURLs_PreservesContent(t *testing.T) {
 
 	const html = `<p>A &amp; B</p>`
 	for _, tc := range []struct {
-		format string
-		body   string
+		format     string
+		body       string
+		escapeHTML bool
 	}{
 		{format: "html", body: html},
 		{format: "markdown", body: "A & B"},
 		{format: "text", body: "A & B"},
+		{format: "html", body: html, escapeHTML: true},
+		{format: "markdown", body: "A & B", escapeHTML: true},
+		{format: "text", body: "A & B", escapeHTML: true},
 	} {
-		t.Run(tc.format, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s/escape_html=%t", tc.format, tc.escapeHTML), func(t *testing.T) {
 			t.Parallel()
 
 			url := runHTTPServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +186,7 @@ func TestFetch_Call_MultipleURLs_PreservesContent(t *testing.T) {
 				fmt.Fprint(w, html)
 			})
 			urls := []string{url + "/?a=1&b=2", url + "/missing", "invalid-url"}
-			tool := newFetchToolForTest()
+			tool := newFetchToolForTest(WithEscapeHTML(tc.escapeHTML))
 
 			result, err := tool.handler.CallTool(t.Context(), ToolArgs{URLs: urls, Format: tc.format})
 			require.NoError(t, err)
@@ -196,12 +200,94 @@ func TestFetch_Call_MultipleURLs_PreservesContent(t *testing.T) {
 				{URL: urls[2], Error: "invalid URL: missing scheme or host"},
 			}, results)
 
-			assert.Contains(t, result.Output, tc.body)
-			assert.Contains(t, result.Output, urls[0])
 			original, err := json.Marshal(results)
 			require.NoError(t, err)
-			assert.JSONEq(t, string(original), result.Output)
-			assert.Less(t, len(result.Output), len(original))
+			if tc.escapeHTML {
+				assert.Equal(t, string(original), result.Output)
+			} else {
+				assert.Contains(t, result.Output, tc.body)
+				assert.Contains(t, result.Output, urls[0])
+				assert.JSONEq(t, string(original), result.Output)
+				assert.Less(t, len(result.Output), len(original))
+			}
+		})
+	}
+}
+
+func TestFetch_EscapeHTMLConfig(t *testing.T) {
+	t.Parallel()
+
+	const body = "<p>café & 日本語</p>\n"
+	url := runHTTPServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, body)
+	}) + "/?a=1&b=2"
+
+	for _, tc := range []struct {
+		name       string
+		setting    string
+		escapeHTML bool
+	}{
+		{name: "default"},
+		{name: "disabled", setting: "escape_html: false"},
+		{name: "legacy", setting: "escape_html: true", escapeHTML: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := config.Load(t.Context(), config.NewBytesSource("fetch.yaml", fmt.Appendf(nil, `
+agents:
+  root:
+    model: openai/gpt-4o
+    toolsets:
+      - type: fetch
+        allow_private_ips: true
+        %s
+`, tc.setting)))
+			require.NoError(t, err)
+			toolset, err := CreateToolSet(cfg.Agents.First().Toolsets[0], &config.RuntimeConfig{})
+			require.NoError(t, err)
+			allTools, err := toolset.Tools(t.Context())
+			require.NoError(t, err)
+			require.Len(t, allTools, 1)
+			schema, err := tools.SchemaToMap(allTools[0].Parameters)
+			require.NoError(t, err)
+			assert.NotContains(t, schema["properties"], "escape_html")
+
+			for _, urls := range [][]string{{url}, {url, "invalid-url"}, {"invalid-url"}} {
+				args, err := json.Marshal(ToolArgs{URLs: urls, Format: "html"})
+				require.NoError(t, err)
+				result, err := allTools[0].Handler(t.Context(), tools.ToolCall{
+					Function: tools.FunctionCall{Arguments: string(args)},
+				}, tools.NopRuntime{})
+				require.NoError(t, err)
+
+				switch {
+				case urls[0] == "invalid-url":
+					assert.Equal(t, tools.ResultError("Error fetching invalid-url: invalid URL: missing scheme or host"), result)
+				case len(urls) == 1:
+					assert.Equal(t, tools.ResultSuccess(fmt.Sprintf("Successfully fetched %s (Status: 200, Length: %d bytes):\n\n%s", url, len(body), body)), result)
+				default:
+					want := []Result{
+						{URL: url, StatusCode: 200, Status: "200 OK", ContentType: "text/html", ContentLength: len(body), Body: body},
+						{URL: "invalid-url", Error: "invalid URL: missing scheme or host"},
+					}
+					original, err := json.Marshal(want)
+					require.NoError(t, err)
+					assert.False(t, result.IsError)
+					assert.JSONEq(t, string(original), result.Output)
+					if tc.escapeHTML {
+						assert.Equal(t, string(original), result.Output)
+					} else {
+						assert.Contains(t, result.Output, "<p>café & 日本語</p>")
+						assert.Contains(t, result.Output, url)
+					}
+				}
+			}
 		})
 	}
 }
