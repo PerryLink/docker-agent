@@ -33,7 +33,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creack/pty v1.1.24
-	github.com/dgageot/rubocop-go v0.0.0-20260627140528-ee9a9b36c3eb
+	github.com/dgageot/rubocop-go v0.0.0-20260914103134-ceff10dc27fa
 	github.com/docker/aijson v0.1.0
 	github.com/docker/cli v29.7.2+incompatible
 	github.com/docker/go-units v0.5.0
