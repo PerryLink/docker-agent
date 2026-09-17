@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -672,12 +670,8 @@ func (sm *SessionManager) CreateSession(ctx context.Context, sessionTemplate *se
 	// will pick these up the first time it is built for the session
 	// (see runtimeForSession). Callers that want a model to also appear
 	// in the picker history should include it in CustomModelsUsed.
-	if len(sessionTemplate.AgentModelOverrides) > 0 {
-		sess.AgentModelOverrides = maps.Clone(sessionTemplate.AgentModelOverrides)
-	}
-	if len(sessionTemplate.CustomModelsUsed) > 0 {
-		sess.CustomModelsUsed = append([]string(nil), sessionTemplate.CustomModelsUsed...)
-	}
+	overrides, customModels := sessionTemplate.ModelStateSnapshot()
+	sess.ReplaceModelState(overrides, customModels)
 
 	if err := sm.sessionStore.AddSession(ctx, sess); err != nil {
 		return nil, err
@@ -2220,17 +2214,7 @@ func (sm *SessionManager) SetSessionAgentModel(ctx context.Context, sessionID, m
 	// metadata added since the runtime was attached.
 	updatedSess := sess.Clone()
 	updatedSess.Origin = sess.Origin
-	if modelRef == "" {
-		delete(updatedSess.AgentModelOverrides, agentName)
-	} else {
-		if updatedSess.AgentModelOverrides == nil {
-			updatedSess.AgentModelOverrides = make(map[string]string)
-		}
-		updatedSess.AgentModelOverrides[agentName] = modelRef
-		if strings.Contains(modelRef, "/") && !slices.Contains(updatedSess.CustomModelsUsed, modelRef) {
-			updatedSess.CustomModelsUsed = append(updatedSess.CustomModelsUsed, modelRef)
-		}
-	}
+	updatedSess.SetAgentModelOverride(agentName, modelRef)
 
 	if err := sm.sessionStore.UpdateSession(ctx, updatedSess); err != nil {
 		rollback := prevOverride
