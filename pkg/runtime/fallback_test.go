@@ -713,10 +713,9 @@ func TestFallbackExecutor_IdleWithoutAdmissionUsesOrdinaryClassification(t *test
 	a := agent.New("delegate", "Delegate", agent.WithModel(modelProvider))
 	executor := newFallbackExecutor()
 	executor.cooldowns = newCooldownManager(time.Now)
-	executor.telemetry = defaultTelemetry{}
 
 	_, _, err := executor.execute(
-		t.Context(), a, modelProvider, nil, nil, session.New(), nil,
+		t.Context(), a, modelProvider, nil, nil, session.New(),
 		&collectSink{}, &idleStreamRetryAllowance{remaining: true, parentSessionID: "parent"}, nil,
 	)
 
@@ -756,11 +755,10 @@ func TestFallbackExecutor_IdleRetryIsAdditionalImmediateRequest(t *testing.T) {
 	a := agent.New("delegate", "Delegate", agent.WithModel(modelProvider), agent.WithFallbackRetries(-1))
 	executor := newFallbackExecutor()
 	executor.cooldowns = newCooldownManager(time.Now)
-	executor.telemetry = defaultTelemetry{}
 	sink := &collectSink{}
 	allowance := &idleStreamRetryAllowance{remaining: true, parentSessionID: "parent"}
 	result, used, err := executor.execute(
-		t.Context(), a, modelProvider, nil, nil, session.New(), nil, sink, allowance,
+		t.Context(), a, modelProvider, nil, nil, session.New(), sink, allowance,
 		func() error { return nil },
 	)
 
@@ -790,13 +788,12 @@ func TestFallbackExecutor_DeniedIdleRetryPreservesAllowanceAndEmitsNothing(t *te
 	a := agent.New("delegate", "Delegate", agent.WithModel(modelProvider), agent.WithFallbackRetries(-1))
 	executor := newFallbackExecutor()
 	executor.cooldowns = newCooldownManager(time.Now)
-	executor.telemetry = defaultTelemetry{}
 	sink := &collectSink{}
 	allowance := &idleStreamRetryAllowance{remaining: true, parentSessionID: "parent"}
 	admissionErr := errors.New("not admitted")
 
 	_, _, err := executor.execute(
-		t.Context(), a, modelProvider, nil, nil, session.New(), nil, sink, allowance,
+		t.Context(), a, modelProvider, nil, nil, session.New(), sink, allowance,
 		func() error { return admissionErr },
 	)
 
@@ -825,11 +822,10 @@ func TestFallbackExecutor_CancellationBeforeIdleRetryAdmission(t *testing.T) {
 	a := agent.New("delegate", "Delegate", agent.WithModel(modelProvider))
 	executor := newFallbackExecutor()
 	executor.cooldowns = newCooldownManager(time.Now)
-	executor.telemetry = defaultTelemetry{}
 	admissionChecks := 0
 
 	_, _, err := executor.execute(
-		ctx, a, modelProvider, nil, nil, session.New(), nil,
+		ctx, a, modelProvider, nil, nil, session.New(),
 		&collectSink{}, &idleStreamRetryAllowance{remaining: true, parentSessionID: "parent"},
 		func() error {
 			admissionChecks++
@@ -849,13 +845,12 @@ func TestFallbackExecutor_CancellationAfterIdleRetryAdmission(t *testing.T) {
 	a := agent.New("delegate", "Delegate", agent.WithModel(modelProvider))
 	executor := newFallbackExecutor()
 	executor.cooldowns = newCooldownManager(time.Now)
-	executor.telemetry = defaultTelemetry{}
 	sink := &collectSink{}
 	allowance := &idleStreamRetryAllowance{remaining: true, parentSessionID: "parent"}
 	admissionChecks := 0
 
 	_, _, err := executor.execute(
-		ctx, a, modelProvider, nil, nil, session.New(), nil, sink, allowance,
+		ctx, a, modelProvider, nil, nil, session.New(), sink, allowance,
 		func() error {
 			admissionChecks++
 			cancel()
@@ -877,12 +872,11 @@ func TestFallbackExecutor_IdleRetryStopsForBudget(t *testing.T) {
 	a := agent.New("delegate", "Delegate", agent.WithModel(modelProvider))
 	executor := newFallbackExecutor()
 	executor.cooldowns = newCooldownManager(time.Now)
-	executor.telemetry = defaultTelemetry{}
 	admissionChecks := 0
 	admissionErr := errors.New("budget exceeded")
 
 	_, _, err := executor.execute(
-		t.Context(), a, modelProvider, nil, nil, session.New(), nil,
+		t.Context(), a, modelProvider, nil, nil, session.New(),
 		&collectSink{}, &idleStreamRetryAllowance{remaining: true, parentSessionID: "parent"},
 		func() error {
 			admissionChecks++

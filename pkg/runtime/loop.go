@@ -849,7 +849,7 @@ func (r *LocalRuntime) runTurn(
 		}
 		return nil
 	}
-	res, usedModel, err := r.fallback.execute(streamCtx, a, model, messages, agentTools, sess, m, events, ls.idleRetry, admitIdleRetry)
+	res, usedModel, err := r.fallback.execute(streamCtx, a, model, messages, agentTools, sess, events, ls.idleRetry, admitIdleRetry)
 	var budgetStop budgetAdmissionError
 	if errors.As(err, &budgetStop) {
 		endStreamSpan()
@@ -886,12 +886,23 @@ func (r *LocalRuntime) runTurn(
 	ls.overflowCompactions = 0
 
 	// Compute the per-turn cost once, here, so the exact same value
-	// reaches both the after_llm_call hook payload and the recorded
+	// reaches telemetry, the after_llm_call hook payload and the recorded
 	// assistant message — the hook's cost is therefore guaranteed to
 	// equal the cost the session bills for this turn. It is nil when
 	// the turn cannot be priced (no usage, or a model with no pricing
 	// table); see computeMessageCost.
 	msgCost := computeMessageCost(res.Usage, m)
+	if res.Usage != nil {
+		modelName := "unknown"
+		if m != nil {
+			modelName = m.Name
+		}
+		var cost float64
+		if msgCost != nil {
+			cost = *msgCost
+		}
+		r.telemetry.RecordTokenUsage(ctx, modelName, res.Usage.PromptTokens(), res.Usage.OutputTokens, cost)
+	}
 
 	// Fold this turn into the run budget from the same computed value, so
 	// what the ceiling counts can never disagree with what the session

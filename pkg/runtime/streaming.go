@@ -11,7 +11,6 @@ import (
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
-	"github.com/docker/docker-agent/pkg/modelsdev"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
 )
@@ -76,7 +75,7 @@ type streamResult struct {
 // It is intentionally a free function rather than a method on *LocalRuntime
 // so the dependency direction is explicit (the loop calls into the chunker,
 // never the reverse).
-func handleStream(ctx context.Context, cancelStream context.CancelCauseFunc, stream chat.MessageStream, a *agent.Agent, agentTools []tools.Tool, sess *session.Session, m *modelsdev.Model, tel Telemetry, events EventSink, idleTimeout time.Duration) (streamResult, error) {
+func handleStream(ctx context.Context, cancelStream context.CancelCauseFunc, stream chat.MessageStream, a *agent.Agent, agentTools []tools.Tool, sess *session.Session, events EventSink, idleTimeout time.Duration) (streamResult, error) {
 	// done is closed when handleStream exits (for any reason) so the reader
 	// goroutine below can detect it and stop trying to send on recvCh.
 	done := make(chan struct{})
@@ -197,8 +196,7 @@ func handleStream(ctx context.Context, cancelStream context.CancelCauseFunc, str
 		}
 	}
 
-	// recordUsage persists the final token counts and emits telemetry exactly
-	// once per stream, after we have the most accurate usage snapshot.
+	// recordUsage persists the final token counts once per stream.
 	usageRecorded := false
 	recordUsage := func() {
 		if usageRecorded || messageUsage == nil {
@@ -208,12 +206,6 @@ func handleStream(ctx context.Context, cancelStream context.CancelCauseFunc, str
 
 		input := messageUsage.InputTokens + messageUsage.CachedInputTokens + messageUsage.CacheWriteTokens
 		sess.SetUsage(input, messageUsage.OutputTokens)
-
-		modelName := "unknown"
-		if m != nil {
-			modelName = m.Name
-		}
-		tel.RecordTokenUsage(ctx, modelName, input, messageUsage.OutputTokens, sess.TotalCost())
 	}
 
 mainLoop:

@@ -77,8 +77,9 @@ func TestFallbackPricing(t *testing.T) {
 				agent.WithFallbackRetries(-1),
 				agent.WithHooks(&latest.HooksConfig{AfterLLMCall: []latest.HookDefinition{{Type: "builtin", Command: "capture-pricing"}}}),
 			)
+			rec := &recordingTelemetry{}
 			rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)),
-				WithModelStore(store), WithSessionCompaction(false), WithBudget(&latest.BudgetConfig{MaxCost: 100}))
+				WithTelemetry(rec), WithModelStore(store), WithSessionCompaction(false), WithBudget(&latest.BudgetConfig{MaxCost: 100}))
 			require.NoError(t, err)
 			var captured *hooks.Input
 			require.NoError(t, rt.hooksRegistry.RegisterBuiltin("capture-pricing",
@@ -139,6 +140,11 @@ func TestFallbackPricing(t *testing.T) {
 				assert.Equal(t, tc.unpriced, budget.Unpriced)
 				assert.InDelta(t, float64(turn+1)*tc.wantCost, budget.Cost, 1e-9)
 				assert.InDelta(t, float64(turn+1)*tc.wantCost, sess.OwnCost(), 1e-9)
+				records := rec.snapshot().tokenUsages
+				require.Len(t, records, turn+1)
+				assert.InDelta(t, tc.wantCost, records[turn].Cost, 1e-9)
+				assert.Equal(t, int64(300_000), records[turn].InputTokens)
+				assert.Equal(t, int64(100_000), records[turn].OutputTokens)
 			}
 			if tc.primarySucceeds {
 				assert.Equal(t, 2, primary.callCount)
