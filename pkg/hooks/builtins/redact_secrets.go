@@ -1,7 +1,9 @@
 package builtins
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -213,10 +215,19 @@ func redactAny(v any) (any, bool) {
 //     (still sent by the OpenAI provider when set)
 //   - the JSON-encoded arguments of every entry in
 //     [chat.Message.ToolCalls]
+//   - the provider-private request log in
+//     [chat.ProviderState.RequestContext] and
+//     [chat.CompactionResult.RequestContext]: Anthropic replays
+//     recorded system and turn-scoped texts from it verbatim, with no
+//     check against the visible fields
 //
 // Other fields (image URLs, file references, ThinkingSignature,
 // ThoughtSignature) are not scanned: they're either opaque provider
 // tokens or non-text payloads outside the portcullis ruleset's reach.
+// [chat.ProviderState.Content] and [chat.CompactionResult.Block] are
+// signed provider payloads guarded by their own visible-content checks;
+// redacting Compaction.Summary would defeat that check and re-enable
+// replay of the plaintext Block, so it is left alone too.
 //
 // MultiContent and ToolCalls slices are cloned (and FunctionCall
 // pointers are deep-copied) before being mutated so the caller's
@@ -251,7 +262,50 @@ func redactMessage(m chat.Message) chat.Message {
 		}
 	}
 
+	if m.ProviderState != nil {
+		if rc, changed := redactRequestContext(m.ProviderState.RequestContext); changed {
+			state := *m.ProviderState
+			state.RequestContext = rc
+			m.ProviderState = &state
+		}
+	}
+
+	if m.Compaction != nil {
+		if rc, changed := redactRequestContext(m.Compaction.RequestContext); changed {
+			c := *m.Compaction
+			c.RequestContext = rc
+			m.Compaction = &c
+		}
+	}
+
 	return m
+}
+
+// redactRequestContext scrubs every string inside a provider request
+// log by walking it as generic JSON. The raw bytes are returned
+// unchanged when nothing matched (or when they aren't JSON at all, in
+// which case the provider ignores them anyway). Numbers are kept as
+// [json.Number] so a rewrite never alters them.
+func redactRequestContext(raw json.RawMessage) (json.RawMessage, bool) {
+	if len(raw) == 0 {
+		return raw, false
+	}
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
+		return raw, false
+	}
+	redacted, changed := redactAny(v)
+	if !changed {
+		return raw, false
+	}
+	out, err := json.Marshal(redacted)
+	if err != nil {
+		// Fail closed: dropping the log costs a cache miss, keeping it leaks.
+		return nil, true
+	}
+	return out, true
 }
 
 // messageChanged reports whether redactMessage rewrote any text-bearing
@@ -290,6 +344,12 @@ func messageChanged(orig, rewritten chat.Message) bool {
 		if orig.ToolCalls[i].Function.Arguments != rewritten.ToolCalls[i].Function.Arguments {
 			return true
 		}
+	}
+	if orig.ProviderState != nil && !bytes.Equal(orig.ProviderState.RequestContext, rewritten.ProviderState.RequestContext) {
+		return true
+	}
+	if orig.Compaction != nil && !bytes.Equal(orig.Compaction.RequestContext, rewritten.Compaction.RequestContext) {
+		return true
 	}
 	return false
 }
