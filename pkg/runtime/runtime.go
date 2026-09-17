@@ -268,6 +268,7 @@ type LocalRuntime struct {
 	providerRegistry *provider.Registry
 	gatewayModels    gatewayModelsCache
 	dmrModels        dmrModelsCache
+	modelContexts    modelContextCache
 
 	// hooksRegistry is the runtime-private hooks.Registry used to build
 	// every Executor. It carries the runtime-owned builtin hooks
@@ -378,9 +379,9 @@ type LocalRuntime struct {
 
 	// dmrModelLister lists the models pulled locally in Docker Model Runner,
 	// used to populate DMR entries in the model picker. Defaults to
-	// dmrmodels.ListModels in NewLocalRuntime; left nil by runtimes built directly
+	// dmrmodels.ListModelsWithMetadata in NewLocalRuntime; left nil by runtimes built directly
 	// (e.g. tests) so DMR discovery stays opt-in. Tests inject a stub here.
-	dmrModelLister func(ctx context.Context) ([]string, error)
+	dmrModelLister func(ctx context.Context) ([]dmrmodels.Model, error)
 
 	// now is the runtime's clock. Defaults to time.Now and can be replaced
 	// in tests via WithClock to make timestamps and cooldown windows
@@ -717,7 +718,7 @@ func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*Loca
 		toolListTimeout:              defaultToolListTimeout,
 		toolStartTimeout:             defaultToolStartTimeout,
 		streamStoppedDeliveryTimeout: defaultStreamStoppedDeliveryTimeout,
-		dmrModelLister:               dmrmodels.ListModels,
+		dmrModelLister:               dmrmodels.ListModelsWithMetadata,
 	}
 	r.bgAgents = agenttool.NewHandler(r)
 	r.fallback.prepareMessages = r.prepareMessagesForModel

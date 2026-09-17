@@ -582,8 +582,8 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		// We can only compact if we know the context limit.
 		// resolveContextLimit prefers provider_opts.context_size when set
 		// (some providers — notably Docker Model Runner — use it to size
-		// the actual inference context), then falls back to the models.dev
-		// catalogue. The lookup above is reused inside resolveContextLimit
+		// the actual inference context), then tries provider discovery and
+		// the models.dev catalogue. The lookup above is reused inside resolveContextLimit
 		// only when context_size isn't supplied; we keep the explicit call
 		// here because m is also passed to [computeMessageCost] for
 		// per-turn cost computation.

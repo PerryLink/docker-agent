@@ -295,10 +295,14 @@ func compactionCaps(primaryLimit, compactionLimit int64) bool {
 //     same number the engine will enforce. This also makes compaction
 //     work for local models that aren't catalogued in models.dev (e.g.
 //     a HuggingFace GGUF).
-//  2. Otherwise, the models.dev catalogue limit looked up by id.
-//  3. Otherwise, 0 (caller treats this as "can't compact").
+//  2. Otherwise, the provider's discovered runtime context window.
+//  3. Otherwise, the models.dev catalogue limit looked up by id.
+//  4. Otherwise, 0 (caller treats this as "can't compact").
 func (r *LocalRuntime) resolveContextLimit(ctx context.Context, p provider.Provider, id modelsdev.ID) int64 {
 	if n := providerContextLimit(p); n > 0 {
+		return n
+	}
+	if n := r.discoveredContextLimit(ctx, p); n > 0 {
 		return n
 	}
 	m, err := r.modelsStore.GetModel(ctx, id)
