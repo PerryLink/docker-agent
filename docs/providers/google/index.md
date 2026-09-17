@@ -65,30 +65,14 @@ models:
 ## Generated Images
 
 Some Gemini models (e.g. `gemini-2.5-flash-image`) are designed to generate
-an image directly as part of their reply, not just describe one. Docker
-Agent requests that image output on supported Google surfaces — the models
-gateway, direct Gemini API, and Vertex AI — according to one binding policy:
-explicit `false`, explicit `true`, then an exact models.dev record whose
-`Modalities.Output` contains `image`. An omitted image flag, including
-`output_capabilities: {}`, uses that catalogue default. Unknown models or
-unavailable catalogue data leave image response modalities disabled; model
-names are never used to guess capability.
-Each eligible ordinary chat request asks for text *and* image output.
-Vertex AI has deterministic guard/predicate coverage; live image-generation
-validation is deferred.
-
-Docker Agent attempts to save each returned image and display it in the TUI — see [Generated Media](../../features/tui/index.md#generated-media)
-for file naming, collision handling, and rendering details.
-
-The workspace file is the visible deliverable. After that file and its manifest
-entry are saved, a portable copy is also stored in the session database and
-preferred when the session is reopened. It can render the original generated
-bytes even if the workspace file was edited, moved, or deleted.
-Generated-media storage and resolution do not impose a size cap. If portable
-persistence fails, the workspace file is still kept and the turn includes a
-warning.
-Sessions created before portable copies were introduced continue to use their
-manifest-gated workspace files.
+an image directly as part of their reply, not just describe one. When the
+model's image output capability resolves as enabled — see
+[Output capabilities](../../configuration/models/index.md#output-capabilities)
+for the `output_capabilities.image` / models.dev precedence rules — Docker
+Agent requests that image output on supported Google surfaces: the models
+gateway, direct Gemini API, and Vertex AI. Each eligible ordinary chat request
+asks for text *and* image output. Vertex AI has deterministic guard/predicate
+coverage; live image-generation validation is deferred.
 
 ```yaml
 models:
@@ -97,11 +81,9 @@ models:
     model: gemini-2.5-flash-image
 ```
 
-When `output_capabilities.image` is omitted, including in an empty block,
-Docker Agent uses models.dev output modalities for the exact known model. Set
-it explicitly for custom models or to override incorrect catalogue data;
-unknown or unavailable metadata remains disabled and capability is never
-guessed from the model name.
+`output_capabilities.image` can be omitted for models that models.dev lists
+with image output; set it explicitly for custom models or to override
+incorrect catalogue data. Capability is never guessed from the model name.
 
 Session-title and compaction requests omit image response modalities and
 bypass the guard even for image-output-capable models. They do not explicitly
@@ -119,17 +101,18 @@ A few provider-side behaviors to know:
   `.gif` or `.svg` filename does not transcode anything — the saved file's
   extension is corrected to match the data actually returned.
 - **An image is not guaranteed.** Even a correctly configured image model
-  can answer with text only and generate no image. At a text-only stop,
-  phrases such as "generate an image" or "draw a picture" in the last user
-  prompt trigger a nonfatal warning while preserving the reply:
-  `The model returned text but no image for this image-generation request. Try rephrasing the request.`
-  This phrase-based check is not semantic intent detection and does not
-  check output capability: negated or quoted phrases can match and other
-  wording can be missed. It does not track a whole submission across tool
-  calls, steering, stop hooks, or handoffs. A terminal provider error skips
-  this check, as does structured output configured on the current agent
-  model; per-call overrides and reply content are not independently
-  classified.
+  can answer with text only and generate no image; that is provider behavior,
+  so reword or repeat the prompt. At a text-only stop, Docker Agent may add a
+  nonfatal phrase-based warning to the turn — see
+  [Generated Media](../../features/tui/index.md#generated-media) for the exact
+  check and its limitations.
+
+Docker Agent attempts to save each returned image into the session workspace,
+keep a portable copy in the session database, and display it in the TUI. See
+[Generated Media Files](../../features/sessions/index.md#generated-media-files)
+for persistence and portability, and
+[Generated Media](../../features/tui/index.md#generated-media) for file
+naming, collision handling, and rendering.
 
 ## Thinking Budget
 

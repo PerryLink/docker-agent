@@ -182,15 +182,12 @@ output. Enabling image output only opts the model into behavior that keys off
 that capability (for example, a provider-specific image-output request
 contract); it does not guarantee that a provider will return an image.
 
-Session-title and compaction requests omit image response modalities and
-bypass the guard even for image-output-capable models; they do not explicitly
-force TEXT-only output. On supported Google surfaces, the guard runs only when
-image output resolves as enabled and an ordinary request includes custom tools
-or structured output; matching requests are rejected locally. Google
-server-side built-ins remain available. For a custom-tool conflict,
-models.dev's `tool_call` capability makes the error say
-whether the model lacks tool calls entirely or only cannot combine them with
-image output; unavailable metadata keeps a conservative generic message.
+Which requests ask for image output, and which request shapes are rejected
+when it is enabled, is provider-specific — see
+[Google Gemini: Generated Images](../../providers/google/index.md#generated-images).
+Where the returned images land and how they are rendered is covered under
+[Generated Media Files](../../features/sessions/index.md#generated-media-files)
+and the TUI's [Generated Media](../../features/tui/index.md#generated-media).
 
 > [!WARNING]
 > **Constraint**

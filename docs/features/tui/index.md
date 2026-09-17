@@ -318,21 +318,12 @@ Attached files are also recorded on the session so sub-agents spawned by task tr
 
 Some models (e.g. Gemini image-output models like `gemini-2.5-flash-image`)
 are designed to generate an image directly as part of their reply, not just
-describe one. When models.dev reports that a model can generate images, or
-[`output_capabilities.image: true`](../../configuration/models/index.md#output-capabilities)
-explicitly enables it, Docker Agent asks it for text *and* image output on the
-models gateway, direct Gemini API, and Vertex AI. An explicit `false` disables
-this behavior. See
-[Google Gemini: Generated Images](../../providers/google/index.md#generated-images)
-for exact configuration and limitations — ordinary image-output requests with
-custom tools or structured output are rejected locally before any request is
-sent. Session-title and compaction requests omit image response modalities and
-skip this guard; they do not explicitly force TEXT-only output. Google
-Search, Maps, and code-execution built-ins remain available. For custom tools,
-models.dev metadata lets the error distinguish
-a model that cannot call tools from an image-output request shape that cannot
-combine both capabilities; unknown metadata keeps a conservative generic
-message.
+describe one. Whether Docker Agent asks a model for image output is decided by
+[`output_capabilities.image`](../../configuration/models/index.md#output-capabilities)
+and models.dev metadata; which requests carry it, and which request shapes
+(custom tools, structured output) are rejected locally, is described under
+[Google Gemini: Generated Images](../../providers/google/index.md#generated-images).
+This section covers what happens to the images that come back.
 
 At a text-only stop, Docker Agent checks the last user prompt for phrases
 such as "generate an image" or "draw a picture". A match preserves the reply
@@ -350,9 +341,9 @@ or parse the reply to determine whether it is structured.
 as an ordinary workspace file and record it in the session manifest. After
 both steps succeed, it stores a complete portable copy in the session database.
 A failed portable-copy write does not remove the saved workspace file and
-produces a per-item warning.
-Database upgrades are in-place and older binaries may not understand the
-upgraded schema — see [Sessions](../sessions/index.md#generated-media-files).
+produces a per-item warning. Persistence, portability, database upgrades, and
+legacy-file authorization rules are covered under
+[Generated Media Files](../sessions/index.md#generated-media-files).
 Generated files are untracked workspace files, yours to edit, commit, move,
 or delete. A remote runtime writes to its own workspace; the local TUI does
 not receive a remote binary-rendering path from this feature.
@@ -395,29 +386,20 @@ manifest before preferring its portable database copy; saved bytes can survive
 workspace edits, deletion, or missing provenance. Without workspace provenance,
 the label uses the recorded relative path rather than a verified absolute file. It falls back to the manifest-gated workspace file only when the
 session store has no blob interface or the blob is not found. Other blob errors
-fail closed. Historical manifest entries that identify an external root are
-rejected. Stores without blob support and sessions created before portable
-blobs were introduced continue to use legacy workspace files.
-Generated-media resolution has no byte cap.
-
-Ordinary outgoing history replaces generated-media parts with metadata
-placeholders, so follow-up turns do not resend stored bytes. Explicitly
-attaching a generated file or asking a tool to read it can send its contents
-to a model. Legacy files still require manifest authorization, containment,
-regular-file and symlink checks. These are not content-integrity checks: an
-ordinary file's bytes may have changed. Failed resolution shows an unavailable
-label rather than reading an unauthorized fallback.
-This generated-media behavior is separate from the existing input bound for
-ordinary Markdown images rendered from assistant text.
+fail closed. Stores without blob support and sessions created before portable
+blobs were introduced continue to use legacy workspace files, subject to the
+manifest, containment, and symlink checks described under
+[Generated Media Files](../sessions/index.md#generated-media-files). Failed
+resolution shows an unavailable label rather than reading an unauthorized
+fallback. Generated-media resolution has no byte cap, and this behavior is
+separate from the existing input bound for ordinary Markdown images rendered
+from assistant text.
 
 If a save fails (unwritable directory, full disk, …), only that image is
 dropped, with a concise warning — the reply text and any sibling images in
 the same turn are kept. If all saves in a media-only reply fail, an empty
 assistant record may remain alongside the warnings. Disk-full, quota, and
 unclassified failures currently use generic retry/debug advice.
-Note also that an image-capable model can answer
-with text only and generate no image at all; that is provider behavior, so
-reword or repeat the prompt.
 
 Inline image rendering in the TUI also covers a tool/MCP result that
 returns an image, or a Markdown image reference to a file a tool actually
