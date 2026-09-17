@@ -66,6 +66,8 @@ type ToolCall struct {
 	ID       string       `json:"id,omitempty"`
 	Type     ToolType     `json:"type"`
 	Function FunctionCall `json:"function"`
+	// ProviderID preserves the native ID when ID is generated locally.
+	ProviderID string `json:"provider_id,omitempty"`
 }
 
 type FunctionCall struct {

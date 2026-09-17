@@ -288,6 +288,9 @@ mainLoop:
 					if delta.Type != "" {
 						tc.Type = delta.Type
 					}
+					if delta.ProviderID != "" {
+						tc.ProviderID = delta.ProviderID
+					}
 					if delta.Function.Name != "" {
 						tc.Function.Name = delta.Function.Name
 					}

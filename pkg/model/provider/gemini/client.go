@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"google.golang.org/genai"
@@ -231,11 +233,23 @@ func convertMessagesToGemini(ctx context.Context, messages []chat.Message, id mo
 	// Vertex Gemini rejects a request unless the turn answering an N-function-call turn
 	// carries exactly N function-response parts, so consecutive tool responses are
 	// coalesced into a single Content instead of one Content per response.
-	var pendingToolParts []*genai.Part
+	type toolResponse struct {
+		part  *genai.Part
+		index int
+	}
+	var pendingToolParts []toolResponse
 	var pendingToolRole genai.Role
+	var toolCalls []tools.ToolCall
+	toolCallIndex := make(map[string]int)
 	flushToolParts := func() {
 		if len(pendingToolParts) > 0 {
-			contents = append(contents, genai.NewContentFromParts(pendingToolParts, pendingToolRole))
+			// Parallel tools finish out of order; Gemini matches responses to call order.
+			slices.SortStableFunc(pendingToolParts, func(a, b toolResponse) int { return cmp.Compare(a.index, b.index) })
+			parts := make([]*genai.Part, 0, len(pendingToolParts))
+			for _, response := range pendingToolParts {
+				parts = append(parts, response.part)
+			}
+			contents = append(contents, genai.NewContentFromParts(parts, pendingToolRole))
 			pendingToolParts = nil
 		}
 	}
@@ -256,34 +270,48 @@ func convertMessagesToGemini(ctx context.Context, messages []chat.Message, id mo
 
 			attachmentParts := functionResponsePartsFromMultiContent(ctx, msg.MultiContent, id, store, override)
 
+			name, providerID := msg.ToolCallID, ""
+			index := len(toolCalls)
+			if callIndex, ok := toolCallIndex[msg.ToolCallID]; ok {
+				name, providerID = toolCalls[callIndex].Function.Name, toolCalls[callIndex].ProviderID
+				index = callIndex
+			}
 			var part *genai.Part
 			if len(attachmentParts) > 0 {
-				part = genai.NewPartFromFunctionResponseWithParts(msg.ToolCallID, response, attachmentParts)
+				part = genai.NewPartFromFunctionResponseWithParts(name, response, attachmentParts)
 			} else {
-				part = genai.NewPartFromFunctionResponse(msg.ToolCallID, response)
+				part = genai.NewPartFromFunctionResponse(name, response)
 			}
-			pendingToolParts = append(pendingToolParts, part)
+			part.FunctionResponse.ID = providerID
+			pendingToolParts = append(pendingToolParts, toolResponse{part: part, index: index})
 			pendingToolRole = role
 			continue
 		}
 
 		flushToolParts()
+		clear(toolCallIndex)
+		toolCalls = nil
 
 		// Handle assistant messages with tool calls
 		if msg.Role == chat.MessageRoleAssistant && len(msg.ToolCalls) > 0 {
 			parts := make([]*genai.Part, 0, len(msg.ToolCalls)+1)
-			sig := thoughtSignatureOrDefault(msg.ThoughtSignature)
+			toolCalls = msg.ToolCalls
 
 			if msg.Content != "" {
-				parts = append(parts, newTextPartWithSignature(msg.Content, sig))
+				parts = append(parts, genai.NewPartFromText(msg.Content))
 			}
-			for _, tc := range msg.ToolCalls {
+			for callIndex, tc := range toolCalls {
+				toolCallIndex[tc.ID] = callIndex
 				var args map[string]any
 				if tc.Function.Arguments != "" {
 					_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 				}
 				fc := genai.NewPartFromFunctionCall(tc.Function.Name, args)
-				fc.ThoughtSignature = sig
+				fc.FunctionCall.ID = tc.ProviderID
+				// Gemini signs the first call, not the accompanying text or parallel calls.
+				if callIndex == 0 {
+					fc.ThoughtSignature = thoughtSignatureOrDefault(msg.ThoughtSignature)
+				}
 				parts = append(parts, fc)
 			}
 

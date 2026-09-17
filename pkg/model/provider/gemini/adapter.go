@@ -32,9 +32,10 @@ type StreamAdapter struct {
 }
 
 type result struct {
-	resp *genai.GenerateContentResponse
-	err  error
-	done bool
+	resp      *genai.GenerateContentResponse
+	err       error
+	done      bool
+	toolCalls bool
 }
 
 // NewStreamAdapter constructs a StreamAdapter from Gemini's iterator
@@ -116,9 +117,11 @@ func (g *StreamAdapter) run() {
 			// Text() to avoid warnings
 			hasText := false
 			hasMedia := false
+			hasSignature := false
 			for _, candidate := range resp.Candidates {
 				if candidate.Content != nil {
 					for _, part := range candidate.Content.Parts {
+						hasSignature = hasSignature || len(part.ThoughtSignature) > 0
 						if part.Text != "" {
 							hasText = true
 						}
@@ -138,8 +141,8 @@ func (g *StreamAdapter) run() {
 			// calls. Forward such chunks so downstream can capture token usage.
 			hasUsage := resp.UsageMetadata != nil
 
-			// Send response if it has content, generated media, function calls, or usage metadata
-			if hasText || hasMedia || hasFuncs || hasUsage {
+			// Empty text chunks can still carry signatures needed for the next request.
+			if hasText || hasMedia || hasFuncs || hasUsage || hasSignature {
 				hasContent = hasContent || hasText || hasMedia
 				hasToolCalls = hasToolCalls || hasFuncs
 				lastResponse = resp // Store for final message
@@ -157,7 +160,7 @@ func (g *StreamAdapter) run() {
 		if lastResponse == nil {
 			lastResponse = &genai.GenerateContentResponse{}
 		}
-		if !g.send(result{done: true, resp: lastResponse}) {
+		if !g.send(result{done: true, resp: lastResponse, toolCalls: hasToolCalls}) {
 			return
 		}
 	}
@@ -223,8 +226,8 @@ func (g *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 		// Set finish reason and role
 		resp.Choices[0].Delta.Role = string(chat.MessageRoleAssistant)
 
-		// Check if we have function calls in the final response
-		if res.resp != nil && len(res.resp.FunctionCalls()) > 0 {
+		// A signature-only or usage-only chunk may follow the function calls.
+		if res.toolCalls {
 			resp.Choices[0].FinishReason = chat.FinishReasonToolCalls
 			// Don't include function calls in the final message - they were already sent
 			slog.Debug("Gemini: Final message with tool calls finish reason")
@@ -292,8 +295,9 @@ func (g *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 				id := "call_" + uuid.New().String()
 				slog.Debug("Gemini: Function call", "name", fc.Name, "args", string(argsJSON), "id", id)
 				toolCalls = append(toolCalls, tools.ToolCall{
-					ID:   id,
-					Type: "function",
+					ID:         id,
+					ProviderID: fc.ID,
+					Type:       "function",
 					Function: tools.FunctionCall{
 						Name:      fc.Name,
 						Arguments: string(argsJSON),
