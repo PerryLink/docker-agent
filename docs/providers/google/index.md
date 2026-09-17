@@ -221,6 +221,35 @@ API does not report token usage for embeddings, so RAG cost statistics stay at
 zero; Vertex AI per-input token statistics are summed into the input token
 count when present.
 
+## Service Tier
+
+Set `provider_opts.service_tier` to pick a Gemini API [Flex](https://ai.google.dev/gemini-api/docs/flex-inference)
+or [Priority](https://ai.google.dev/gemini-api/docs/priority-inference) inference tier:
+
+```yaml
+models:
+  gemini-flex:
+    provider: google
+    model: gemini-2.5-flash
+    provider_opts:
+      service_tier: flex
+```
+
+| Tier       | Description                                                                 |
+| ---------- | --------------------------------------------------------------------------- |
+| `flex`     | Discounted, queued processing; a request may wait before the model answers. |
+| `standard` | The default tier; same as omitting the option.                              |
+| `priority` | Premium pricing for faster, more consistent processing.                     |
+
+The value is forwarded unchanged as the top-level `serviceTier` of every `generateContent` request on the Gemini Developer API, Vertex AI, and the Docker models gateway; the endpoint must support it. It applies to all requests using the configured model, including reranking, title generation, and compaction. Other values are passed through for the API to validate. When omitted or empty, no `serviceTier` is sent, leaving the API's default behavior unchanged. Non-string values are ignored. [Vertex AI Model Garden](#vertex-ai-model-garden) models do not use this option.
+
+Flex requests can sit in Google's queue for up to 15 minutes before the first byte arrives. Docker Agent normally treats a stream that stays silent for 5 minutes as stalled; for `google` models with `service_tier: flex` it waits 15 minutes instead. Other tiers and providers keep the 5 minute limit. Rate-limit (`429`) and overloaded (`503`) responses are retried like any other Gemini request; Docker Agent never upgrades a request to a different tier on your behalf.
+
+> [!WARNING]
+> Docker Agent's cost estimates do not adjust for `service_tier`. They use the catalogue's standard pricing, which overestimates `flex` and underestimates `priority` charges. Set the model's [`cost` override](../../configuration/models/index.md#custom-token-pricing) to the applicable input, output, and cache token rates for your tier.
+
+See [`examples/gemini_service_tier.yaml`](https://github.com/docker/docker-agent/blob/main/examples/gemini_service_tier.yaml) for a complete example.
+
 ## Vertex AI Model Garden
 
 You can use non-Gemini models (e.g. Claude, Llama) hosted on Google Cloud's

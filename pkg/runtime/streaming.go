@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
 )
@@ -29,6 +30,20 @@ import (
 // constant directly, so tests can pass a short timeout without mutating shared
 // state (and can therefore run in parallel).
 const defaultStreamIdleTimeout = 5 * time.Minute
+
+// flexStreamIdleTimeout replaces defaultStreamIdleTimeout for Gemini Flex
+// requests, which Google may queue for up to 15 minutes before the first byte.
+const flexStreamIdleTimeout = 15 * time.Minute
+
+// streamIdleTimeoutFor returns the idle timeout for p's streams. Only Gemini
+// Flex gets the longer window; every other provider and tier keeps the default.
+func streamIdleTimeoutFor(p provider.Provider) time.Duration {
+	cfg := p.BaseConfig().ModelConfig
+	if cfg.Provider == "google" && cfg.ProviderOpts["service_tier"] == "flex" {
+		return flexStreamIdleTimeout
+	}
+	return defaultStreamIdleTimeout
+}
 
 // errStreamIdle is the sentinel error returned when the upstream model stream
 // produces no SSE events for longer than defaultStreamIdleTimeout. It does
@@ -71,7 +86,7 @@ type streamResult struct {
 // underlying TCP connection and unblocks the stream reader goroutine.
 //
 // idleTimeout bounds the wait for the next SSE chunk; production callers pass
-// defaultStreamIdleTimeout, tests pass a short value.
+// streamIdleTimeoutFor(provider), tests pass a short value.
 //
 // handleStream is a pure stream-aggregation routine: it does not touch
 // runtime state and can be unit-tested by feeding a mock chat.MessageStream.
