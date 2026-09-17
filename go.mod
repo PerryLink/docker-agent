@@ -59,7 +59,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/muesli/cancelreader v0.2.2
 	github.com/natefinch/atomic v1.0.1
-	github.com/openai/openai-go/v3 v3.54.0
+	github.com/openai/openai-go/v3 v3.61.0
 	github.com/pb33f/libopenapi v0.38.7
 	github.com/rivo/uniseg v0.4.7
 	github.com/rumpl/harness v0.0.0-20260810193856-9376b9c76461
