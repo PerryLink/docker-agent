@@ -777,3 +777,24 @@ func TestHandleStream_TextWithoutMarkersUnchanged(t *testing.T) {
 	assert.Equal(t, res.Content, live)
 	assert.Empty(t, res.Media)
 }
+
+func TestHandleStream_PreservesProviderToolCallID(t *testing.T) {
+	t.Parallel()
+
+	builder := newStreamBuilder().
+		AddToolCallName("local-call", "lookup").
+		AddToolCallArguments("local-call", `{"city":"Paris"}`).
+		AddStopWithUsage(1, 1)
+	builder.responses[0].Choices[0].Delta.ToolCalls[0].ProviderID = "gemini-call"
+	stream := builder.Build()
+	a := agent.New("root", "test", agent.WithModel(&mockProvider{id: "test/mock-model", stream: stream}))
+	res, err := handleStream(
+		t.Context(), nil, stream, a, nil, session.New(session.WithUserMessage("go")), nil,
+		defaultTelemetry{}, NewChannelSink(make(chan Event, 64)), defaultStreamIdleTimeout,
+	)
+	require.NoError(t, err)
+	require.Len(t, res.Calls, 1)
+	assert.Equal(t, "local-call", res.Calls[0].ID)
+	assert.Equal(t, "gemini-call", res.Calls[0].ProviderID)
+	assert.JSONEq(t, `{"city":"Paris"}`, res.Calls[0].Function.Arguments)
+}

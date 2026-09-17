@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -368,7 +369,7 @@ func TestConvertMessagesToGemini_ThoughtSignature(t *testing.T) {
 		name      string
 		message   chat.Message
 		wantParts int
-		wantSig   []byte
+		wantSigs  [][]byte
 	}{
 		{
 			name: "preserves existing signature",
@@ -381,7 +382,7 @@ func TestConvertMessagesToGemini_ThoughtSignature(t *testing.T) {
 				}},
 			},
 			wantParts: 1,
-			wantSig:   realSig,
+			wantSigs:  [][]byte{realSig},
 		},
 		{
 			name: "uses default when signature is nil (cross-model)",
@@ -393,7 +394,7 @@ func TestConvertMessagesToGemini_ThoughtSignature(t *testing.T) {
 				}},
 			},
 			wantParts: 1,
-			wantSig:   defaultSig,
+			wantSigs:  [][]byte{defaultSig},
 		},
 		{
 			name: "uses default when signature is empty (non-nil)",
@@ -406,10 +407,10 @@ func TestConvertMessagesToGemini_ThoughtSignature(t *testing.T) {
 				}},
 			},
 			wantParts: 1,
-			wantSig:   defaultSig,
+			wantSigs:  [][]byte{defaultSig},
 		},
 		{
-			name: "applies to text and all function call parts",
+			name: "cross-model signature only on first function call",
 			message: chat.Message{
 				Role:    chat.MessageRoleAssistant,
 				Content: "calling tools",
@@ -418,8 +419,32 @@ func TestConvertMessagesToGemini_ThoughtSignature(t *testing.T) {
 					{ID: "call-2", Function: tools.FunctionCall{Name: "tool_b", Arguments: `{"x":1}`}},
 				},
 			},
-			wantParts: 3, // text + 2 function calls
-			wantSig:   defaultSig,
+			wantParts: 3,
+			wantSigs:  [][]byte{nil, defaultSig, nil},
+		},
+		{
+			name: "real signature only on first function call",
+			message: chat.Message{
+				Role:             chat.MessageRoleAssistant,
+				Content:          "calling tools",
+				ThoughtSignature: realSig,
+				ToolCalls: []tools.ToolCall{
+					{ID: "call-1", Function: tools.FunctionCall{Name: "tool_a", Arguments: `{}`}},
+					{ID: "call-2", Function: tools.FunctionCall{Name: "tool_b", Arguments: `{"x":1}`}},
+				},
+			},
+			wantParts: 3,
+			wantSigs:  [][]byte{nil, realSig, nil},
+		},
+		{
+			name: "text-only signature is preserved",
+			message: chat.Message{
+				Role:             chat.MessageRoleAssistant,
+				Content:          "done",
+				ThoughtSignature: realSig,
+			},
+			wantParts: 1,
+			wantSigs:  [][]byte{realSig},
 		},
 	}
 
@@ -438,7 +463,7 @@ func TestConvertMessagesToGemini_ThoughtSignature(t *testing.T) {
 			require.Len(t, assistant.Parts, tt.wantParts)
 
 			for i, p := range assistant.Parts {
-				assert.Equal(t, tt.wantSig, p.ThoughtSignature, "part %d", i)
+				assert.Equal(t, tt.wantSigs[i], p.ThoughtSignature, "part %d", i)
 			}
 		})
 	}
@@ -593,5 +618,68 @@ func TestConvertMessagesToGemini_ParallelToolResponsesCoalesced(t *testing.T) {
 		"two parallel tool responses must be coalesced into one Content with two FunctionResponse parts")
 	for i, p := range toolResp.Parts {
 		require.NotNil(t, p.FunctionResponse, "part %d should be a FunctionResponse", i)
+		assert.Equal(t, messages[1].ToolCalls[i].Function.Name, p.FunctionResponse.Name)
+		assert.Empty(t, p.FunctionResponse.ID)
+	}
+}
+
+func TestConvertMessagesToGemini_ToolResponseMatching(t *testing.T) {
+	t.Parallel()
+
+	for _, withAttachment := range []bool{false, true} {
+		t.Run(fmt.Sprintf("attachment=%t", withAttachment), func(t *testing.T) {
+			t.Parallel()
+
+			toolResult := chat.Message{Role: chat.MessageRoleTool, ToolCallID: "call-1", Content: "result"}
+			if withAttachment {
+				toolResult.MultiContent = []chat.MessagePart{{
+					Type:     chat.MessagePartTypeImageURL,
+					ImageURL: &chat.MessageImageURL{URL: "data:image/png;base64,AQID"},
+				}}
+			}
+			messages := []chat.Message{
+				{Role: chat.MessageRoleUser, Content: "go"},
+				{
+					Role: chat.MessageRoleAssistant,
+					ToolCalls: []tools.ToolCall{{
+						ID: "call-1", ProviderID: "native-1", Function: tools.FunctionCall{Name: "first_tool"},
+					}},
+				},
+				toolResult,
+				{
+					Role: chat.MessageRoleAssistant,
+					ToolCalls: []tools.ToolCall{{
+						ID: "call-1", ProviderID: "native-2", Function: tools.FunctionCall{Name: "second_tool"},
+					}},
+				},
+				toolResult,
+				{Role: chat.MessageRoleUser, Content: "next turn"},
+				toolResult,
+			}
+			contents := convertMessagesToGemini(t.Context(), messages, modelsdev.ID{}, modelsdev.NewDatabaseStore(&modelsdev.Database{}), nil)
+			require.Len(t, contents, len(messages))
+			for _, expected := range []struct {
+				index int
+				name  string
+				id    string
+			}{
+				{2, "first_tool", "native-1"},
+				{4, "second_tool", "native-2"},
+				{6, "call-1", ""}, // An unmatched result must not use a previous turn's metadata.
+			} {
+				require.Len(t, contents[expected.index].Parts, 1)
+				response := contents[expected.index].Parts[0].FunctionResponse
+				require.NotNil(t, response)
+				assert.Equal(t, expected.name, response.Name)
+				assert.Equal(t, expected.id, response.ID)
+				assert.Equal(t, map[string]any{"result": "result"}, response.Response)
+				if withAttachment {
+					require.Len(t, response.Parts, 1)
+					assert.Equal(t, []byte{1, 2, 3}, response.Parts[0].InlineData.Data)
+				} else {
+					assert.Empty(t, response.Parts)
+				}
+			}
+		})
 	}
 }
