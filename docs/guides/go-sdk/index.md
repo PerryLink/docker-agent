@@ -127,9 +127,37 @@ if err := chat.Restart(); err != nil {
 | `Tool.Finished` | Tool call completed; `Tool.IsError` is true if it errored.             |
 | `Err`          | A user-facing runtime error; no further content events follow.           |
 | `Done`         | Clean end of turn; no more events.                                       |
+| `Elicitation`  | A pending MCP elicitation request (`Config.ForwardElicitation` only); answer with `RespondToElicitation`. |
 | `RuntimeEvent` | The original `runtime.Event` for callers that need the full stream.      |
 
-For advanced use (custom elicitation, raw event inspection), call `chat.Runtime()` to access the underlying `runtime.Runtime` directly.
+### Opt-in behaviors
+
+The defaults suit a plain chat UI; a richer host (a JS bridge, a browser build) can opt into more:
+
+```go
+chat, err := embeddedchat.New(ctx, embeddedchat.Config{
+    Team: myTeam,
+    // Do not record the process working directory as workspace provenance
+    // (wasm hosts, servers). Conversations get a WorkingDir only if
+    // SessionOptions set one.
+    NonLocal: true,
+    // Surface MCP elicitation requests instead of declining them.
+    ForwardElicitation: true,
+    // Also deliver events the compact projection drops (reasoning, handoffs,
+    // model fallback, token usage, ...) with only RuntimeEvent set.
+    ForwardAllEvents: true,
+})
+```
+
+With `ForwardElicitation`, the runtime stays blocked until you answer; requests are declined for you once the run errored or was cancelled:
+
+```go
+case ev.Elicitation != nil:
+    err := chat.RespondToElicitation(ctx, tools.ElicitationActionAccept,
+        map[string]any{"token": token}, ev.Elicitation.ElicitationID)
+```
+
+For anything beyond that, call `chat.Runtime()` to access the underlying `runtime.Runtime` directly.
 
 > [!WARNING]
 > **Breaking change: `Runtime.ResumeElicitation` (#3584)**
