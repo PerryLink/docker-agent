@@ -48,7 +48,7 @@ var rejectionKeywords = []struct {
 	}},
 	{RejectionIncompatibleFunctionOrBuiltinTools, []string{
 		"function_declarations", "functiondeclarations",
-		"google_search", "google_maps", "code_execution",
+		"google_search", "google_maps", "code_execution", "url_context", "urlcontext",
 		"built-in tool", "builtin tool",
 	}},
 	{RejectionModelOrAPICapabilityMismatch, []string{
