@@ -467,8 +467,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	}
 
 	// Initialize consecutive duplicate tool call detector.
-	// Polling tools (view_background_agent, list_background_agents,
-	// view_background_job) are expected to be called repeatedly with
+	// Polling and wait tools are expected to be called repeatedly with
 	// identical arguments while a background task is in progress. Exempt
 	// them so they never trigger the loop-termination path.
 	loopThreshold := sess.MaxConsecutiveToolCalls
@@ -478,6 +477,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	ls.loopDetector = toolexec.NewLoopDetector(loopThreshold,
 		bgagent.ToolNameViewBackgroundAgent,
 		bgagent.ToolNameListBackgroundAgents,
+		bgagent.ToolNameWaitBackgroundAgents,
 		backgroundjobs.ToolNameViewBackgroundJob,
 	)
 

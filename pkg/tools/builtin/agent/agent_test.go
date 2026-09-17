@@ -100,11 +100,14 @@ func insertTask(h *Handler, id, agentName string, status taskStatus) *task {
 		agentName: agentName,
 		taskDesc:  "test task",
 		cancel:    func() {},
+		done:      make(chan struct{}),
 		startTime: time.Now(),
 	}
 	t.status.Store(int32(status))
 	if status == taskRunning {
 		h.activeTasks++
+	} else {
+		close(t.done)
 	}
 	h.tasks.Store(id, t)
 	return t
@@ -838,12 +841,12 @@ func TestHandler_ConcurrentAccess(t *testing.T) {
 
 // --- Tools ---
 
-func TestNewToolSet_ReturnsFourTools(t *testing.T) {
+func TestNewToolSet_ReturnsFiveTools(t *testing.T) {
 	t.Parallel()
 	ts := New()
 	toolsList, err := ts.Tools(t.Context())
 	require.NoError(t, err)
-	assert.Len(t, toolsList, 4)
+	assert.Len(t, toolsList, 5)
 
 	names := make([]string, len(toolsList))
 	for i, tl := range toolsList {
@@ -853,6 +856,7 @@ func TestNewToolSet_ReturnsFourTools(t *testing.T) {
 	assert.Contains(t, names, ToolNameListBackgroundAgents)
 	assert.Contains(t, names, ToolNameViewBackgroundAgent)
 	assert.Contains(t, names, ToolNameStopBackgroundAgent)
+	assert.Contains(t, names, ToolNameWaitBackgroundAgents)
 }
 
 func TestNewToolSet_Instructions(t *testing.T) {
@@ -867,4 +871,5 @@ func TestNewToolSet_Instructions(t *testing.T) {
 	assert.Contains(t, instructions, "list_background_agents")
 	assert.Contains(t, instructions, "view_background_agent")
 	assert.Contains(t, instructions, "stop_background_agent")
+	assert.Contains(t, instructions, "wait_background_agents")
 }
