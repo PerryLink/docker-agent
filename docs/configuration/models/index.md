@@ -70,8 +70,8 @@ models:
 | `presence_penalty`    | float      | ✗        | Encourage topic diversity (`-2.0–2.0`)                                                |
 | `base_url`            | string     | ✗        | Custom API endpoint URL (for self-hosted or proxied endpoints)                        |
 | `token_key`           | string     | ✗        | Environment variable name containing the API token (overrides provider default)       |
-| `thinking_budget`     | string/int | ✗        | Reasoning effort control                                                              |
-| `task_budget`         | int/object | ✗        | Total token budget for an agentic task (forwarded to Anthropic; see [Task Budget](#task-budget)). |
+| `thinking_budget`     | string/int | ✗        | Reasoning effort control. See [Thinking Budget](#thinking-budget).                    |
+| `task_budget`         | int/object | ✗        | Total token budget for an agentic task (Anthropic only). See [Task Budget](#task-budget). |
 | `parallel_tool_calls` | boolean    | ✗        | Allow model to call multiple tools at once. When omitted, Docker Agent leaves the setting unset so the selected provider or API can apply its own default. |
 | `track_usage`         | boolean    | ✗        | Track and report token usage for this model                                           |
 | `routing`             | array      | ✗        | Rule-based routing to different models. See [Model Routing](../routing/index.md). |
@@ -424,60 +424,32 @@ See [`examples/first_available.yaml`](https://github.com/docker/docker-agent/blo
 
 ## Thinking Budget
 
-Control how much reasoning the model does before responding. This varies by provider:
-
-### OpenAI
-
-Uses effort levels as strings:
-
-```yaml
-models:
-  gpt:
-    provider: openai
-    model: gpt-5.6
-    thinking_budget: low # none | minimal | low | medium | high | xhigh | max (xhigh needs gpt-5.2+; none/max need gpt-5.6+; minimal dropped on gpt-5.6+)
-```
-
-### Anthropic
-
-Uses an integer token budget (1024–32768), or — on adaptive-capable models (Opus 4.6+) — `adaptive`, `adaptive/<effort>`, or a bare effort level:
+Control how much reasoning the model does before responding with `thinking_budget` (string or integer). The accepted values and defaults depend on the provider and model. See the [Thinking / Reasoning guide](../../guides/thinking/index.md#quick-reference) for the comparison and how to choose an effort level.
 
 ```yaml
 models:
   claude:
     provider: anthropic
     model: claude-sonnet-4-5
-    thinking_budget: 16384 # must be < max_tokens
-
-  opus:
-    provider: anthropic
-    model: claude-opus-4-6
-    thinking_budget: adaptive # or adaptive/<effort>, or low | medium | high | xhigh | max
+    max_tokens: 32768
+    thinking_budget: 16384
 ```
+
+### OpenAI
+
+Use a string effort level. See [OpenAI thinking budgets](../../providers/openai/index.md#thinking-budget) for supported levels and model restrictions.
+
+### Anthropic
+
+Use an integer token budget or an adaptive effort setting, depending on the model. See [Anthropic thinking budgets](../../providers/anthropic/index.md#thinking-budget) for accepted values, the `max_tokens` constraint, and model restrictions.
 
 ### Google Gemini 2.5
 
-Uses an integer token budget. `0` disables, `-1` lets the model decide:
-
-```yaml
-models:
-  gemini:
-    provider: google
-    model: gemini-2.5-flash
-    thinking_budget: -1 # dynamic (default)
-```
+Use an integer token budget. See [Gemini thinking budgets](../../providers/google/index.md#thinking-budget) for defaults, limits, and dynamic thinking.
 
 ### Google Gemini 3
 
-Uses effort levels like OpenAI:
-
-```yaml
-models:
-  gemini3:
-    provider: google
-    model: gemini-3-flash
-    thinking_budget: medium # minimal | low | medium | high
-```
+Use a string effort level. See [Gemini thinking budgets](../../providers/google/index.md#thinking-budget) for supported values and examples.
 
 ### Disabling Thinking
 
@@ -485,41 +457,17 @@ models:
 thinking_budget: none # or 0
 ```
 
-`none` and `0` both clear Docker Agent's local thinking configuration (omitting `thinking_budget` has the same effect); neither is guaranteed to reach the API as a real "off" switch:
-
-- **OpenAI gpt-5.6+** (Sol/Terra/Luna) is the only case with a genuine API-level `none` reasoning effort: Docker Agent sends it as-is and the model does not reason.
-- **Older OpenAI reasoning models** (o-series, gpt-5 through gpt-5.5) have no such switch: `none`/`0` just clear the local config, and the model falls back to the API's own default effort and still reasons internally. Same for other always-reasoning models (Gemini 3).
-- Providers with a true optional-thinking switch (Gemini 2.5, Claude, local models) are fully disabled by `none`/`0`.
-
-```yaml
-models:
-  fast-responder:
-    provider: openai
-    model: gpt-5.6
-    thinking_budget: none # real API-level disable on gpt-5.6+
-```
-
-See the [Thinking / Reasoning guide](../../guides/thinking/index.md) for per-provider details, including AWS Bedrock and Docker Model Runner.
+`none` and `0` both clear Docker Agent's local thinking configuration (omitting `thinking_budget` has the same effect). Whether that reaches the API as a real "off" switch depends on the model — see [Disabling Thinking](../../guides/thinking/index.md#disabling-thinking) in the guide.
 
 ## Task Budget
 
 **Anthropic-only.**
 
 `task_budget` caps the **total** number of tokens the model may spend across a
-multi-step agentic task — combining thinking, tool calls, and final output
-tokens. It lets long-running agents self-regulate effort without having to
-choose a tight per-call `max_tokens`.
-
-It is forwarded to Anthropic's
-[`output_config.task_budget`](https://platform.claude.com/docs/en/about-claude/models/whats-new-claude-4-7)
-request field. Docker Agent automatically attaches the required
-`task-budgets-2026-03-13` beta header whenever this field is set.
-
-You can configure `task_budget` on **any** Claude model — Docker Agent never
-gates it by model name. At the time of writing only **Claude Opus 4.7**
-actually honors the field; other Claude models will reject requests that
-include it. Check the Anthropic release notes linked above for the current
-list of supported models.
+multi-step agentic task — thinking, tool calls, and final output combined.
+Docker Agent never gates it by model name; which Claude models honor or
+reject the field, and how it is forwarded to the API, is covered on the
+[Anthropic provider page](../../providers/anthropic/index.md#task-budget).
 
 ### Integer shorthand
 
@@ -557,36 +505,11 @@ See [`examples/task_budget.yaml`](https://github.com/docker/docker-agent/blob/ma
 
 ## Interleaved Thinking
 
-For Anthropic and Bedrock Claude models, interleaved thinking allows tool calls during model reasoning. It is auto-enabled whenever a thinking budget is configured:
-
-```yaml
-models:
-  claude:
-    provider: anthropic
-    model: claude-sonnet-4-5
-    thinking_budget: 8192
-    # interleaved_thinking is auto-enabled when thinking_budget is set
-    provider_opts:
-      interleaved_thinking: false # disable if needed
-```
+`provider_opts.interleaved_thinking` controls reasoning between tool calls on Claude models. See [Anthropic](../../providers/anthropic/index.md#interleaved-thinking) or [Bedrock](../../providers/bedrock/index.md#interleaved-thinking-claude-on-bedrock) for automatic enablement, opt-out syntax, and beta-header handling.
 
 ## Thinking Display (Anthropic)
 
-For Anthropic Claude models, `thinking_display` controls whether thinking blocks are returned in responses when thinking is enabled. Newer Claude models (Opus 4.7+, Fable 5) hide thinking content by default (`omitted`); Docker Agent requests `summarized` thinking by default for adaptive/effort-based budgets so reasoning stays visible. Set this provider option to override:
-
-```yaml
-models:
-  opus-4-7:
-    provider: anthropic
-    model: claude-opus-4-7
-    thinking_budget: adaptive
-    provider_opts:
-      thinking_display: omitted # "summarized" or "omitted" ("display" on pre-4.6 models only)
-```
-
-`display` (full thinking blocks) is only accepted by pre-4.6 token-thinking models (e.g. Sonnet 4.5, Haiku 4.5); newer models (Opus/Sonnet 4.6+, Sonnet 5, Fable 5) only accept `summarized` and `omitted`, and Docker Agent rejects the configuration at startup.
-
-See the [Anthropic provider page](../../providers/anthropic/index.md#thinking-display) for details.
+`provider_opts.thinking_display` controls the thinking content returned in responses. See [Anthropic: Thinking Display](../../providers/anthropic/index.md#thinking-display) for accepted values, defaults, an override example, and startup validation.
 
 ## Custom HTTP Headers
 

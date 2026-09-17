@@ -107,7 +107,7 @@ agents:
 | `parallel_tool_calls` | boolean    | Whether to enable parallel tool calls by default. When omitted, the provider/API default is used.         | —                        |
 | `track_usage`         | boolean    | Whether to track token usage by default.                                              | —                        |
 | `thinking_budget`     | string/int | Default reasoning effort/budget.                                                      | —                        |
-| `task_budget`         | int/object | Default total token budget for an agentic task (forwarded to Anthropic; honored by Claude Opus 4.7+ today). Integer shorthand or `{type: tokens, total: N}`. | —                        |
+| `task_budget`         | int/object | Default total token budget for an agentic task. See [Task Budget](../../configuration/models/index.md#task-budget) for syntax and [Anthropic](../anthropic/index.md#task-budget) for model support. | —                        |
 | `compaction_model`    | string     | Default model used for session compaction (summary generation) by agents whose model uses this provider. Named model or inline `provider/model` string. Agent-level and model-level `compaction_model` take precedence. | —                        |
 | `provider_opts`       | object     | Provider-specific options passed through to the client.                               | —                        |
 
