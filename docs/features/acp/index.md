@@ -68,19 +68,7 @@ Host Application
 docker agent serve acp <agent-file>|<registry-ref> [flags]
 ```
 
-| Flag                              | Default                | Description                                                                                                          |
-| --------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `-s, --session-db <path>`         | `<data-dir>/session.db` | Path to the SQLite session database.                                                                                 |
-| `--working-dir <path>`            | current dir            | Working directory the agent runs in.                                                                                 |
-| `--env-from-file <file>`          | (none)                 | Load additional environment variables from a `.env` file (repeatable).                                               |
-| `--models-gateway <url>`          | (none)                 | Route all provider traffic through a models gateway URL.                                                             |
-| `--code-mode-tools`               | `false`                | Expose tools as a single "code" toolset that accepts a JavaScript snippet to run.                                    |
-| `--hook-pre-tool-use <cmd>`       | (none)                 | Add a pre-tool-use hook (repeatable). See [Hooks](../../configuration/hooks/index.md).                     |
-| `--hook-post-tool-use <cmd>`      | (none)                 | Add a post-tool-use hook (repeatable).                                                                               |
-| `--hook-session-start <cmd>`      | (none)                 | Add a session-start hook (repeatable).                                                                               |
-| `--hook-session-end <cmd>`        | (none)                 | Add a session-end hook (repeatable).                                                                                 |
-| `--hook-on-user-input <cmd>`      | (none)                 | Add an on-user-input hook (repeatable).                                                                              |
-| `--hook-stop <cmd>`               | (none)                 | Add a stop hook, fired when the model finishes responding (repeatable).                                              |
+See the [CLI reference](../cli/index.md#docker-agent-serve-acp) for all flags, defaults, and shared runtime options.
 
 ## Integration Example
 
