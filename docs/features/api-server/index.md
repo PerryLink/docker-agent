@@ -197,17 +197,10 @@ $ curl -N -X POST http://localhost:8080/api/sessions/abc-123/agent/my-agent \
 docker agent serve api <agent-file>|<agents-dir> [flags]
 ```
 
-| Flag               | Default          | Description                                      |
-| ------------------ | ---------------- | ------------------------------------------------ |
-| `-l, --listen`     | `127.0.0.1:8080` | Address to listen on                             |
-| `--auth-token`     | (none)           | Bearer token required for all API requests. Leave empty to disable authentication (safe when listening on loopback interfaces only). Recommended when `--listen` binds to a network-reachable interface. |
-| `--max-request-size <bytes>` | `1048576` (1 MiB) | Maximum request body size in bytes. Requests whose body exceeds this limit are rejected with HTTP 413 (Request Entity Too Large) — see [Troubleshooting: HTTP 413](../../community/troubleshooting/index.md#http-413-request-body-too-large) if you hit this. |
-| `--session-workingdir-root` | (none — unrestricted) | Confine the `working_dir` accepted by `POST /api/sessions` to this directory: after resolving symlinks, the requested directory must be the root or one of its descendants. By default any clean host directory is accepted — the intended behaviour for local single-user daemons that open arbitrary workspaces — but raw values containing `..` are always rejected. Set a root whenever the API serves callers that must not reach arbitrary host paths (multi-user or network-exposed deployments). |
-| `-s, --session-db` | `session.db`     | Path to the SQLite session database              |
-| `--pull-interval`  | `0` (disabled)   | Auto-pull OCI reference every N minutes          |
-| `--fake`           | (none)           | Replay AI responses from cassette file (testing) |
-| `--record`         | (none)           | Record AI API interactions to cassette file. Routes through `--models-gateway` when one is configured. |
-| `--mcp-oauth-redirect-uri` | (none)   | Public HTTPS URL advertised as the OAuth `redirect_uri` for unmanaged MCP OAuth flows. When set, Docker Agent drives PKCE and code exchange in-process and sends the full authorize URL to the client via elicitation. See [Remote MCP](../remote-mcp/index.md) for details. |
+See the [CLI reference](../cli/index.md#docker-agent-serve-api) for all flags, defaults, and shared runtime options.
+
+> [!WARNING]
+> Set `--auth-token` when listening on a network-reachable interface. For multi-user or network-exposed deployments, also set `--session-workingdir-root` to confine the host directories callers can use for sessions.
 
 > [!NOTE]
 > **What `--max-request-size` does and doesn't cover**
