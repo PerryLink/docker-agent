@@ -84,11 +84,23 @@ func NewBM25FromConfig(ctx context.Context, cfg latest.RAGStrategyConfig, buildC
 	}, nil
 }
 
+// bm25Database is the storage backend used by BM25Strategy.
+type bm25Database interface {
+	AddDocument(ctx context.Context, doc database.Document) error
+	DeleteDocumentsByPath(ctx context.Context, sourcePath string) error
+	GetAllDocuments(ctx context.Context) ([]database.Document, error)
+	GetFileMetadata(ctx context.Context, sourcePath string) (*database.FileMetadata, error)
+	SetFileMetadata(ctx context.Context, metadata database.FileMetadata) error
+	GetAllFileMetadata(ctx context.Context) ([]database.FileMetadata, error)
+	DeleteFileMetadata(ctx context.Context, sourcePath string) error
+	Close() error
+}
+
 // BM25Strategy implements BM25 keyword-based retrieval
 // BM25 is a ranking function that uses term frequency and inverse document frequency
 type BM25Strategy struct {
 	name         string
-	db           *bm25DB
+	db           bm25Database
 	docProcessor chunk.DocumentProcessor
 	fileHashes   map[string]string
 	fileHashesMu sync.Mutex
@@ -109,7 +121,7 @@ type BM25Strategy struct {
 }
 
 // newBM25Strategy creates a new BM25-based retrieval strategy
-func newBM25Strategy(name string, db *bm25DB, events chan<- types.Event, k1, b float64, chunking ChunkingConfig, shouldIgnore func(string) bool) *BM25Strategy {
+func newBM25Strategy(name string, db bm25Database, events chan<- types.Event, k1, b float64, chunking ChunkingConfig, shouldIgnore func(string) bool) *BM25Strategy {
 	// Create the appropriate document processor based on config
 	var dp chunk.DocumentProcessor
 	if chunking.CodeAware {
