@@ -53,6 +53,7 @@ var cops = []cop.Cop{
 // the entire loaded program rather than once per file.
 var programCops = []prog.Cop{
 	SessionStateAccessors,
+	StreamCloseSafety,
 	ExclusiveStreamLease,
 	rubocops.NewLintContextConnectivity(),
 }
