@@ -863,3 +863,29 @@ func TestCostDialogRefreshesOnLiveSessionUpdates(t *testing.T) {
 	view = dialog.View()
 	assert.Contains(t, view, "#2")
 }
+
+func TestCostDialogUsageOnlyResponses(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	usage := chat.Usage{InputTokens: 100, OutputTokens: 50, ReasoningTokens: 50}
+	sess.AddMessage(&session.Message{
+		AgentName: "worker",
+		Message: chat.Message{
+			Role: chat.MessageRoleAssistant, ReasoningContent: "thinking",
+			Model: "test/model", Cost: 0.004, Usage: &usage,
+		},
+	})
+
+	data := (&costDialog{session: sess}).gatherCostData()
+	assert.InDelta(t, 0.004, data.total.cost, 1e-9)
+	assert.Equal(t, usage, data.total.Usage)
+	require.Len(t, data.agents, 1)
+	assert.Equal(t, "worker", data.agents[0].label)
+	assert.InDelta(t, 0.004, data.agents[0].cost, 1e-9)
+	require.Len(t, data.models, 1)
+	assert.Equal(t, "test/model", data.models[0].label)
+	assert.InDelta(t, 0.004, data.models[0].cost, 1e-9)
+	require.Len(t, data.messages, 1)
+	assert.InDelta(t, 0.004, data.messages[0].cost, 1e-9)
+}

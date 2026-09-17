@@ -4961,10 +4961,8 @@ func TestRunAgentEmitsFinalUsageOnCancellation(t *testing.T) {
 // TestReasoningOnlyTurnEmitsWarning is a regression test for
 // https://github.com/docker/docker-agent/issues/3145. A thinking-mode model
 // (e.g. Qwen3 via an openai_chatcompletions provider) can stream only reasoning
-// tokens and then stop with no content and no tool calls. recordAssistantMessage
-// skips that empty turn, which previously left the user staring at silence. The
-// runtime must instead surface a Warning explaining that the model produced only
-// reasoning, and must still not persist an assistant message.
+// tokens and then stop with no content and no tool calls. The warning must
+// remain visible even though the empty response is retained for accounting.
 func TestReasoningOnlyTurnEmitsWarning(t *testing.T) {
 	stream := newStreamBuilder().
 		AddReasoning("The user wants the file list. ").
@@ -4990,8 +4988,8 @@ func TestReasoningOnlyTurnEmitsWarning(t *testing.T) {
 
 	require.NotNil(t, warn, "expected a Warning event for a reasoning-only turn")
 	assert.Contains(t, warn.Message, "only reasoning")
-	assert.False(t, assistantPersisted,
-		"a reasoning-only turn must not persist an assistant message")
+	assert.True(t, assistantPersisted,
+		"a reasoning-only turn must retain its usage for accounting")
 }
 
 // TestEmptyTurnEmitsWarning verifies that a wholly empty turn (no content, no
