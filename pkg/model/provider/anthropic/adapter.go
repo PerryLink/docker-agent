@@ -207,5 +207,5 @@ func finishReason(stopReason anthropic.StopReason, sawToolUse bool) chat.FinishR
 
 // Close closes the stream
 func (a *streamAdapter) Close() {
-	a.stream.Close()
+	a.close()
 }
