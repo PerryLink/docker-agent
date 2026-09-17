@@ -267,3 +267,19 @@ func TestFallback_DropsCatalogForLegacyModel(t *testing.T) {
 	require.Len(t, fallbackRequests, 1)
 	assert.ElementsMatch(t, []string{"regular", deferred.ToolNameSearchTool, deferred.ToolNameAddTool}, fallbackRequests[0])
 }
+
+func TestNativeCompactionDropsSearchOnlyCatalogTools(t *testing.T) {
+	t.Parallel()
+
+	comp := &mockCompactor{id: "anthropic/claude-test", opts: nativeOpts, result: nativeResult()}
+	root := agent.New("root", "test",
+		agent.WithModel(comp),
+		agent.WithFallbackModel(&toolCapturingProvider{cfg: nativeSearchConfig()}),
+		agent.WithToolSets(newDeferredAgentToolSets(tools.Tool{Name: "write_file", Handler: noopHandler})...),
+	)
+	rt := newNativeRuntime(t, root)
+	got := runCompaction(t, rt, nativeTestSession(), "")
+	require.Equal(t, CompactionOutcomeApplied, got.outcome)
+	require.Equal(t, 1, comp.callCount())
+	assert.ElementsMatch(t, []string{"regular", deferred.ToolNameSearchTool, deferred.ToolNameAddTool}, toolNames(comp.tools))
+}

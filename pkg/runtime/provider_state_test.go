@@ -1,0 +1,121 @@
+package runtime
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/agent"
+	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/session"
+)
+
+func testProviderState() *chat.ProviderState {
+	return &chat.ProviderState{
+		Provider:  "anthropic",
+		MessageID: "msg_1",
+		Content:   json.RawMessage(`[{"type":"thinking","thinking":"t","signature":"s"},{"type":"text","text":"Hello"}]`),
+	}
+}
+
+// AddStopWithProviderState appends a terminal chunk carrying the provider's
+// raw response, the way the Anthropic adapters do on message_stop.
+func (b *streamBuilder) AddStopWithProviderState(finishReason chat.FinishReason, state *chat.ProviderState) *streamBuilder {
+	b.responses = append(b.responses, chat.MessageStreamResponse{
+		Choices: []chat.MessageStreamChoice{{
+			Index:        0,
+			FinishReason: finishReason,
+			Delta:        chat.MessageDelta{ProviderState: state},
+		}},
+		Usage: &chat.Usage{InputTokens: 1, OutputTokens: 1},
+	})
+	return b
+}
+
+func runHandleStream(t *testing.T, stream *mockStream) streamResult {
+	t.Helper()
+	a := agent.New("root", "test", agent.WithModel(&mockProvider{id: "test/mock-model", stream: stream}))
+	sess := session.New(session.WithUserMessage("go"))
+	res, err := handleStream(
+		t.Context(), nil, stream, a, nil, sess,
+		NewChannelSink(make(chan Event, 64)), defaultStreamIdleTimeout,
+	)
+	require.NoError(t, err)
+	return res
+}
+
+func TestHandleStream_ProviderStatePropagates(t *testing.T) {
+	t.Parallel()
+
+	t.Run("on terminal chunk", func(t *testing.T) {
+		t.Parallel()
+		res := runHandleStream(t, newStreamBuilder().
+			AddContent("Hello").
+			AddStopWithProviderState(chat.FinishReasonStop, testProviderState()).
+			Build())
+		require.NotNil(t, res.ProviderState)
+		assert.Equal(t, "msg_1", res.ProviderState.MessageID)
+	})
+
+	t.Run("with tool calls then bare EOF", func(t *testing.T) {
+		t.Parallel()
+		res := runHandleStream(t, newStreamBuilder().
+			AddToolCallName("toolu_1", "read_file").
+			AddToolCallArguments("toolu_1", `{}`).
+			AddStopWithProviderState(chat.FinishReasonToolCalls, testProviderState()).
+			Build())
+		require.Len(t, res.Calls, 1)
+		require.NotNil(t, res.ProviderState)
+	})
+
+	t.Run("dropped on refusal", func(t *testing.T) {
+		t.Parallel()
+		res := runHandleStream(t, newStreamBuilder().
+			AddToolCallName("toolu_1", "rm_rf").
+			AddStopWithProviderState(chat.FinishReasonRefusal, testProviderState()).
+			Build())
+		assert.Equal(t, chat.FinishReasonRefusal, res.FinishReason)
+		assert.Empty(t, res.Calls)
+		assert.Nil(t, res.ProviderState, "raw response still holds the refused tool_use blocks")
+	})
+
+	t.Run("dropped on XML tool call fallback", func(t *testing.T) {
+		t.Parallel()
+		res := runHandleStream(t, newStreamBuilder().
+			AddContent(`<tool_call>{"name":"read_file","arguments":{}}</tool_call>`).
+			AddStopWithProviderState(chat.FinishReasonStop, testProviderState()).
+			Build())
+		require.Len(t, res.Calls, 1)
+		assert.Nil(t, res.ProviderState, "raw response has no tool_use block for the extracted call")
+	})
+}
+
+func TestRecordAssistantMessage_SealsProviderState(t *testing.T) {
+	t.Parallel()
+
+	stream := newStreamBuilder().
+		AddReasoning("t").
+		AddContent("Hello").
+		AddStopWithProviderState(chat.FinishReasonStop, testProviderState()).
+		Build()
+	sess := session.New(session.WithUserMessage("Hi"))
+	runSession(t, sess, stream)
+
+	msgs := sess.GetAllMessages()
+	last := msgs[len(msgs)-1].Message
+	require.Equal(t, chat.MessageRoleAssistant, last.Role)
+	require.NotNil(t, last.ProviderState)
+	assert.Equal(t, last.VisibleContentHash(), last.ProviderState.ContentHash)
+	assert.NotNil(t, last.ReplayableProviderState("anthropic"))
+
+	// Persistence round trip keeps the state replayable; a later edit does not.
+	data, err := json.Marshal(last)
+	require.NoError(t, err)
+	var restored chat.Message
+	require.NoError(t, json.Unmarshal(data, &restored))
+	assert.NotNil(t, restored.ReplayableProviderState("anthropic"))
+	restored.Content = "Hello, edited"
+	assert.Nil(t, restored.ReplayableProviderState("anthropic"))
+}

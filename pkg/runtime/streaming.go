@@ -47,7 +47,10 @@ type streamResult struct {
 	ThinkingSignature string
 	ThoughtSignature  []byte
 	OpenAIResponse    *chat.OpenAIResponse
-	ResponseStarted   bool
+	// ProviderState is the provider's raw response, when it sent one on the
+	// terminal chunk. See chat.ProviderState.
+	ProviderState   *chat.ProviderState
+	ResponseStarted bool
 	// Media accumulates every [chat.MediaDelta] streamed during the turn
 	// (e.g. generated images). Populated regardless of provider — see
 	// chat.MessageDelta.Media.
@@ -115,6 +118,7 @@ func handleStream(ctx context.Context, cancelStream context.CancelCauseFunc, str
 	var thinkingSignature string
 	var thoughtSignature []byte
 	var openAIResponse *chat.OpenAIResponse
+	var providerState *chat.ProviderState
 	var toolCalls []tools.ToolCall
 	var media []chat.MediaDelta
 	var messageUsage *chat.Usage
@@ -188,6 +192,8 @@ func handleStream(ctx context.Context, cancelStream context.CancelCauseFunc, str
 			"tool_calls", len(extracted),
 		)
 		toolCalls = extracted
+		// The raw response has no tool_use blocks for these calls; never replay it.
+		providerState = nil
 		fullContent.Reset()
 		fullContent.WriteString(textBefore)
 		for _, tc := range toolCalls {
@@ -249,6 +255,10 @@ mainLoop:
 			if len(choice.Delta.ThoughtSignature) > 0 {
 				responseStarted = true
 				thoughtSignature = choice.Delta.ThoughtSignature
+			}
+
+			if choice.Delta.ProviderState != nil {
+				providerState = choice.Delta.ProviderState
 			}
 
 			// A terminal chunk can also carry media; collect it before returning.
@@ -336,12 +346,14 @@ mainLoop:
 					// classifier ended the turn: executing them would perform
 					// actions the model refused to complete, and replaying their
 					// tool_use blocks without results breaks the next request.
+					// The raw response still holds those blocks, so it goes too.
 					if len(toolCalls) > 0 {
 						slog.WarnContext(ctx, "Dropping tool calls from refused turn",
 							"agent", a.Name(), "tool_calls", len(toolCalls))
 						toolCalls = nil
 						openAIResponse = nil
 					}
+					providerState = nil
 				} else {
 					applyXMLFallback()
 					if finishReason == chat.FinishReasonStop && len(toolCalls) > 0 {
@@ -355,6 +367,7 @@ mainLoop:
 					ThinkingSignature: thinkingSignature,
 					ThoughtSignature:  thoughtSignature,
 					OpenAIResponse:    openAIResponse,
+					ProviderState:     providerState,
 					Media:             media,
 					Stopped:           len(toolCalls) == 0, // stop only when there are no tool calls to execute
 					FinishReason:      finishReason,
@@ -454,6 +467,7 @@ mainLoop:
 		ThinkingSignature: thinkingSignature,
 		ThoughtSignature:  thoughtSignature,
 		OpenAIResponse:    openAIResponse,
+		ProviderState:     providerState,
 		Media:             media,
 		Stopped:           stoppedNoToolCalls,
 		FinishReason:      finishReason,
