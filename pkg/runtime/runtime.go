@@ -327,11 +327,9 @@ type LocalRuntime struct {
 	budgetsCfg   map[string]latest.BudgetConfig
 	agentBudgets map[string][]string
 
-	// budgetMu guards budget and budgetStarted. The first root stream
-	// installs the trackers and every later one reuses them, so a budget
-	// spans the session rather than resetting on each message; sub-sessions
-	// read the same set, so delegated work spends against the root run's
-	// wallets rather than getting a fresh allowance each.
+	// budgetMu guards budget and budgetStarted. The first root stream or
+	// manual compaction installs the trackers; subsequent runs reuse them.
+	// Delegated and compaction work share the same wallets.
 	budgetMu sync.Mutex
 	budget   *budgetSet
 	// budgetStarted distinguishes "not built yet" from "built, and there

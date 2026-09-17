@@ -612,6 +612,12 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 			r.compactIfNeeded(ctx, sess, a, contextLimit, sr.messageCountBefore, sink)
 		}
 
+		// Proactive compaction may have exhausted the budget since the first check.
+		if r.enforceBudget(ctx, sess, a, sink) == iterationStop {
+			streamReason = turnEndReasonBudgetExceeded
+			return
+		}
+
 		// Everything from turn_start onwards is wrapped in a closure so a
 		// single deferred turn_end hook fires on every exit path: a normal
 		// stop, a follow-up continue, an error, a hook-driven shutdown, the
