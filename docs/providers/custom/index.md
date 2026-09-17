@@ -45,30 +45,7 @@ agents:
 
 ### Anthropic with shared defaults
 
-```yaml
-providers:
-  my_anthropic:
-    provider: anthropic
-    token_key: MY_ANTHROPIC_KEY
-    max_tokens: 16384
-    thinking_budget: 8192
-
-models:
-  claude_smart:
-    provider: my_anthropic
-    model: claude-sonnet-5
-    # Inherits max_tokens: 16384, thinking_budget: 8192
-
-  claude_fast:
-    provider: my_anthropic
-    model: claude-haiku-4-5
-    thinking_budget: 1024  # Overrides provider default
-
-agents:
-  root:
-    model: claude_smart
-    instruction: You are a helpful assistant.
-```
+Use a named Anthropic provider to share settings across models while allowing model-level overrides. See [Default Inheritance](#default-inheritance) for the example and precedence rules.
 
 ### Google with shared temperature
 
@@ -209,32 +186,20 @@ models:
 
 ### Anthropic Team Setup
 
+Agents can use different models backed by the same named provider. Starting from the [Default Inheritance](#default-inheritance) example:
+
 ```yaml
-providers:
-  team_anthropic:
-    provider: anthropic
-    token_key: TEAM_ANTHROPIC_KEY
-    max_tokens: 32768
-    thinking_budget: high
-    temperature: 0.5
-
-models:
-  architect:
-    provider: team_anthropic
-    model: claude-sonnet-5
-
-  reviewer:
-    provider: team_anthropic
-    model: claude-haiku-4-5
-    thinking_budget: low  # faster reviews
-
 agents:
   root:
-    model: architect
+    model: claude_default
+    instruction: You coordinate the development team.
     sub_agents: [code_reviewer]
   code_reviewer:
-    model: reviewer
+    model: claude_custom
+    instruction: You review code.
 ```
+
+Each model inherits provider defaults independently; its overrides do not affect the other model.
 
 ### Multi-Provider with Shared Defaults
 
