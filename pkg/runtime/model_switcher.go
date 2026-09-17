@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -628,7 +629,11 @@ func (r *LocalRuntime) AvailableModels(ctx context.Context) []ModelChoice {
 			choice.CacheWriteCost = cfg.Cost.CacheWrite
 		}
 		if n := latest.ContextSizeFromProviderOpts(cfg.ProviderOpts); n > 0 {
-			choice.ContextLimit = int(n)
+			if n > math.MaxInt {
+				choice.ContextLimit = math.MaxInt
+			} else {
+				choice.ContextLimit = int(n)
+			}
 		}
 		choices = append(choices, choice)
 	}

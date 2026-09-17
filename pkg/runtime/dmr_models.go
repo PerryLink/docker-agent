@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -204,7 +205,11 @@ func (r *LocalRuntime) populateDMRChoices(ctx context.Context, choices []ModelCh
 		}
 		applyDMRMetadata(choice, meta)
 		if n := latest.ContextSizeFromProviderOpts(cfg.ProviderOpts); n > 0 {
-			choice.ContextLimit = int(n)
+			if n > math.MaxInt {
+				choice.ContextLimit = math.MaxInt
+			} else {
+				choice.ContextLimit = int(n)
+			}
 		}
 	}
 }

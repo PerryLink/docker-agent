@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"math"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -290,4 +292,34 @@ func TestConfiguredContextWithoutDiscovery(t *testing.T) {
 	choices := r.AvailableModels(t.Context())
 	require.Len(t, choices, 1)
 	assert.Equal(t, 4096, choices[0].ContextLimit)
+}
+
+func TestConfiguredContextIntegerBounds(t *testing.T) {
+	t.Parallel()
+
+	for _, n := range []int64{32768, math.MaxInt32, math.MaxInt32 + 1, math.MaxInt64} {
+		value := strconv.FormatInt(n, 10)
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			for _, discovered := range []bool{false, true} {
+				t.Run(strconv.FormatBool(discovered), func(t *testing.T) {
+					t.Parallel()
+
+					r := dmrRuntime(nil, stubModelStore{}, map[string]latest.ModelConfig{
+						"local": {Provider: "dmr", Model: "ai/qwen3", ProviderOpts: map[string]any{"context_size": value}},
+					})
+					if discovered {
+						r.dmrModelLister = func(context.Context) ([]dmrmodels.Model, error) {
+							return []dmrmodels.Model{{ID: "ai/qwen3", Metadata: &dmrmodels.Metadata{ContextWindow: 4096}}}, nil
+						}
+					}
+					choices := r.AvailableModels(t.Context())
+					require.Len(t, choices, 1)
+					assert.Equal(t, min(n, int64(math.MaxInt)), int64(choices[0].ContextLimit))
+					assert.Positive(t, choices[0].ContextLimit)
+				})
+			}
+		})
+	}
 }
