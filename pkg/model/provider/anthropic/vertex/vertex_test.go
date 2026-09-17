@@ -44,3 +44,14 @@ func TestNewClient_RequiresConfigAndEnv(t *testing.T) {
 	_, err = NewClient(t.Context(), &latest.ModelConfig{Provider: "anthropic", Model: "claude-sonnet-4-6"}, nil, "project", "location")
 	require.ErrorContains(t, err, "environment provider is required")
 }
+
+func TestRejectClaudeAPIOnlyFeatures(t *testing.T) {
+	t.Parallel()
+	for _, feature := range []string{"native_compaction", "cache_diagnostics"} {
+		t.Run(feature, func(t *testing.T) {
+			cfg := &latest.ModelConfig{Provider: "anthropic", Model: "claude-opus-5", ProviderOpts: map[string]any{feature: true}}
+			_, err := NewClient(t.Context(), cfg, environment.NewMapEnvProvider(nil), "project", "location")
+			require.ErrorContains(t, err, "requires the Claude API")
+		})
+	}
+}

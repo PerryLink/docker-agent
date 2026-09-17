@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider/anthropic"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
+	"github.com/docker/docker-agent/pkg/model/provider/providerutil"
 )
 
 // cloudPlatformScope is the OAuth2 scope required for Vertex AI API access.
@@ -37,6 +38,11 @@ const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider, project, location string, opts ...options.Opt) (*anthropic.Client, error) {
 	if cfg == nil {
 		return nil, errors.New("model configuration is required")
+	}
+	for _, name := range []string{"native_compaction", "cache_diagnostics"} {
+		if enabled, _ := providerutil.GetProviderOptBool(cfg.ProviderOpts, name); enabled {
+			return nil, fmt.Errorf("%s requires the Claude API and is not available on Vertex AI", name)
+		}
 	}
 	if env == nil {
 		return nil, errors.New("environment provider is required")

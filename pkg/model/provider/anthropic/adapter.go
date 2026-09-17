@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -28,6 +29,11 @@ type streamAdapter struct {
 	// we must remember the ID per block to route partial JSON correctly
 	// when multiple tool calls stream in parallel.
 	toolIDByBlock map[int64]string
+	// message accumulates the raw response so message_stop can hand the
+	// runtime the exact content blocks for replay. rawLost marks an
+	// accumulation failure; the stream keeps flowing without raw state.
+	message anthropic.Message
+	rawLost bool
 }
 
 func (c *Client) newStreamAdapter(stream *ssestream.Stream[anthropic.MessageStreamEventUnion], trackUsage bool) *streamAdapter {
@@ -79,6 +85,7 @@ func (a *streamAdapter) Recv() (chat.MessageStreamResponse, error) {
 	}
 
 	event := a.stream.Current()
+	a.accumulate(event)
 
 	response := chat.MessageStreamResponse{
 		ID:     event.Message.ID,
@@ -147,9 +154,22 @@ func (a *streamAdapter) Recv() (chat.MessageStreamResponse, error) {
 		}
 	case anthropic.MessageStopEvent:
 		response.Choices[0].FinishReason = finishReason(a.stopReason, a.toolCall)
+		if !a.rawLost {
+			response.Choices[0].Delta.ProviderState = newProviderState(a.message.ID, a.message.Content)
+		}
 	}
 
 	return response, nil
+}
+
+func (a *streamAdapter) accumulate(event anthropic.MessageStreamEventUnion) {
+	if a.rawLost {
+		return
+	}
+	if err := a.message.Accumulate(event); err != nil {
+		a.rawLost = true
+		slog.Debug("Anthropic: raw response capture disabled", "error", err)
+	}
 }
 
 // usageFromDelta maps the standard Messages API streaming usage onto chat.Usage.
