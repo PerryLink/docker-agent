@@ -462,6 +462,27 @@ These tools let the agent browse a large toolset on-demand without activating ev
 
 See [`examples/deferred.yaml`](https://github.com/docker/docker-agent/blob/main/examples/deferred.yaml) for a complete example.
 
+### Provider-Native Tool Search (OpenAI)
+
+On OpenAI models that support it, the deferred catalog can instead be searched by OpenAI's hosted [tool search](https://developers.openai.com/api/docs/guides/tools-tool-search). Opt in per model with `provider_opts.native_tool_search`:
+
+```yaml
+models:
+  gpt:
+    provider: openai
+    model: gpt-5.6-sol
+    provider_opts:
+      native_tool_search: true
+```
+
+Every deferred tool is then declared to the API with `defer_loading: true` next to a server-executed `tool_search` tool, so the model discovers and calls deferred tools directly, without a `search_tool`/`add_tool` round trip. `search_tool` and `add_tool` stay available. Toolset `tools`, `read_only`, and skill allow-lists apply to the catalog exactly as they do to regular tools, and so do permissions.
+
+The option is ignored, and the legacy behaviour kept, for models without support (only `openai` models that support deferred tools qualify; the `chatgpt` provider and OpenAI-compatible endpoints, including `openai` with a custom `base_url`, do not), on Chat Completions requests, and on fallback models without the option. Agents using `code_mode_tools` keep the legacy behaviour: their tools are only reachable through `run_tools_with_javascript`.
+
+Native search also enables ordered response replay, including encrypted reasoning. For native-only workflows, tell the agent to prefer native tool search over `search_tool`/`add_tool`; those tools remain available for fallback models.
+
+See [`examples/deferred_native_tool_search.yaml`](https://github.com/docker/docker-agent/blob/main/examples/deferred_native_tool_search.yaml) for a complete example.
+
 ## Combined Example
 
 ```yaml

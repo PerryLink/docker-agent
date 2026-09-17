@@ -395,6 +395,7 @@ func (c *Client) CreateChatCompletionStream(
 	}
 
 	messages = c.withClaudeSchemaInstruction(ctx, messages)
+	requestTools = tools.WithoutSearchOnly(requestTools)
 
 	trackUsage := c.TrackUsageEnabled()
 
@@ -657,8 +658,14 @@ func (c *Client) CreateResponseStream(
 	}
 
 	messages = c.withClaudeSchemaInstruction(ctx, messages)
+	allRequestTools := requestTools
+	requestTools, hostedTools, err := c.hostedToolSearchTools(ctx, requestTools)
+	if err != nil {
+		return nil, err
+	}
 
 	input := c.convertMessagesToResponseInput(ctx, messages)
+	input = c.filterToolSearchHistory(input, allRequestTools)
 	deferredToolsEnabled := c.supportsDeferredTools()
 	if deferredToolsEnabled {
 		loadedInput, err := injectDeferredToolLoads(input, requestTools)
@@ -673,6 +680,7 @@ func (c *Client) CreateResponseStream(
 		ServiceTier: responses.ResponseNewParamsServiceTier(serviceTier(c.ModelConfig.ProviderOpts)),
 	}
 	params.Input.OfInputItemList = input
+	c.configureResponseState(ctx, &params, messages)
 
 	if c.ModelConfig.Temperature != nil {
 		params.Temperature = param.NewOpt(*c.ModelConfig.Temperature)
@@ -687,9 +695,9 @@ func (c *Client) CreateResponseStream(
 		slog.DebugContext(ctx, "OpenAI responses request configured with max output tokens", "max_output_tokens", maxTokens)
 	}
 
-	if len(requestTools) > 0 {
+	if len(requestTools) > 0 || len(hostedTools) > 0 {
 		slog.DebugContext(ctx, "Adding tools to OpenAI responses request", "tool_count", len(requestTools))
-		toolsParam := make([]responses.ToolUnionParam, 0, len(requestTools))
+		toolsParam := make([]responses.ToolUnionParam, 0, len(requestTools)+len(hostedTools))
 		for _, tool := range requestTools {
 			if deferredToolsEnabled && tool.Deferred {
 				continue
@@ -714,6 +722,7 @@ func (c *Client) CreateResponseStream(
 
 			slog.DebugContext(ctx, "Added tool to OpenAI responses request", "tool_name", tool.Name)
 		}
+		toolsParam = append(toolsParam, hostedTools...)
 		if len(toolsParam) > 0 {
 			params.Tools = toolsParam
 
@@ -795,16 +804,15 @@ func (c *Client) CreateResponseStream(
 		applyChatGPTResponsesPolicy(ctx, &params)
 	}
 
-	// Log the request in JSON format for debugging
+	// Keep prompt and tool diagnostics without logging opaque reasoning blobs.
 	if requestJSON, err := json.Marshal(params); err == nil {
-		slog.DebugContext(ctx, "OpenAI responses request", "request", string(requestJSON))
+		slog.DebugContext(ctx, "OpenAI responses request", "request", redactEncryptedContent(requestJSON))
 	} else {
 		slog.ErrorContext(ctx, "Failed to marshal OpenAI responses request to JSON", "error", err)
 	}
 
 	// Choose transport: WebSocket or SSE (default).
 	transport := getTransport(&c.ModelConfig)
-	trackUsage := c.TrackUsageEnabled()
 
 	switch {
 	case webSocketEnabled(&c.ModelConfig, &c.ModelOptions):
@@ -814,7 +822,7 @@ func (c *Client) CreateResponseStream(
 			// Fall through to SSE below.
 		} else {
 			slog.DebugContext(ctx, "OpenAI responses WebSocket stream created successfully", "model", c.ModelConfig.Model)
-			return newResponseStreamAdapter(stream, trackUsage), nil
+			return c.responseAdapter(ctx, stream), nil
 		}
 	case transport == "websocket" && c.ModelOptions.Gateway() != "":
 		slog.DebugContext(ctx, "WebSocket transport requested but Gateway is configured, using SSE",
@@ -836,7 +844,7 @@ func (c *Client) CreateResponseStream(
 	stream := client.Responses.NewStreaming(ctx, params)
 
 	slog.DebugContext(ctx, "OpenAI responses stream created successfully", "model", c.ModelConfig.Model)
-	return newResponseStreamAdapter(stream, trackUsage), nil
+	return c.responseAdapter(ctx, stream), nil
 }
 
 // createWebSocketStream sends a request over the pre-initialized WebSocket
@@ -849,6 +857,10 @@ func (c *Client) createWebSocketStream(
 		return nil, errors.New("websocket pool not initialized")
 	}
 
+	// Full-history replay must not also append to connection-local history.
+	if c.preservesResponseState() {
+		params.PreviousResponseID = param.Null[string]()
+	}
 	return c.wsPool.Stream(ctx, params)
 }
 
@@ -929,6 +941,10 @@ func (c *Client) convertMessagesToResponseInput(ctx context.Context, messages []
 	markBreakpoints := sendsExplicitCacheBreakpoints(&c.ModelConfig, c.ModelOptions.OpenAIVendor())
 	var input []responses.ResponseInputItemUnionParam
 	for _, msg := range messages {
+		if replay := c.replayResponse(msg); len(replay) > 0 {
+			input = append(input, replay...)
+			continue
+		}
 		// Skip invalid messages
 		if msg.Role == chat.MessageRoleAssistant && len(msg.ToolCalls) == 0 && len(msg.MultiContent) == 0 && strings.TrimSpace(msg.Content) == "" {
 			continue

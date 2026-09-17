@@ -101,6 +101,27 @@ func SupportsDeferredTools(provider, modelID string) bool {
 	}
 }
 
+// SupportsHostedToolSearch reports whether provider/model is verified to run
+// the Responses API server-executed tool_search tool. Only OpenAI's own API
+// qualifies: the ChatGPT backend and OpenAI-compatible endpoints are not.
+func SupportsHostedToolSearch(provider, modelID string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider != "openai" {
+		return false
+	}
+	m := normalizeOpenAI(modelID)
+	// Named models may resolve to dated snapshots before provider construction.
+	if len(m) > len("-2006-01-02") {
+		cut := len(m) - len("2006-01-02")
+		if m[cut-1] == '-' {
+			if _, err := time.Parse(time.DateOnly, m[cut:]); err == nil {
+				m = m[:cut-1]
+			}
+		}
+	}
+	return m == "gpt-5.6" || SupportsDeferredTools(provider, m)
+}
+
 // UsesReasoningEffort reports whether an OpenAI model accepts the
 // `reasoning.effort` API parameter.
 //

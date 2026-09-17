@@ -249,3 +249,64 @@ func TestDeferredToolset_ConcurrentAddTool(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, currentTools, 3) // search_tool, add_tool, tool1 — never duplicated
 }
+
+// The catalog exposes every deferred tool, handler included, before any
+// add_tool call, so a provider-native tool search can dispatch straight
+// into it. Activation does not change it: the host keeps the declaration
+// stable and resolves the duplicate with the regular list itself.
+func TestDeferredToolset_CatalogTools(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	handler := tools.NewHandler(func(context.Context, struct{}) (*tools.ToolCallResult, error) {
+		return tools.ResultSuccess("ran"), nil
+	})
+	source := &mockToolSet{toolList: []tools.Tool{
+		{Name: "write_file", Description: "Writes", Handler: handler},
+		{Name: "kept", Description: "Always exposed"},
+		{Name: "read_file", Description: "Reads", Handler: handler},
+	}}
+	slow := &mockToolSet{toolList: []tools.Tool{{Name: "slow_tool", Handler: handler}}}
+	slow.notStarted.Store(true)
+
+	dt := New()
+	dt.AddSource(source, false, []string{"read_file", "write_file"})
+	dt.AddSource(slow, true, nil)
+
+	catalog, err := dt.CatalogTools(ctx)
+	require.NoError(t, err)
+	require.Len(t, catalog, 2)
+	assert.Equal(t, "read_file", catalog[0].Name)
+	assert.Equal(t, "write_file", catalog[1].Name)
+	for _, tool := range catalog {
+		require.NotNil(t, tool.Handler, tool.Name)
+		result, err := tool.Handler(ctx, tools.ToolCall{}, tools.NopRuntime{})
+		require.NoError(t, err)
+		assert.Equal(t, "ran", result.Output)
+	}
+
+	slow.notStarted.Store(false)
+	result, err := dt.handleAddTool(ctx, AddToolArgs{Name: "read_file"})
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "has been activated")
+
+	catalog, err = dt.CatalogTools(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"read_file", "slow_tool", "write_file"}, catalogNames(catalog))
+
+	currentTools, err := dt.Tools(ctx)
+	require.NoError(t, err)
+	assert.Len(t, currentTools, 3) // search_tool, add_tool, read_file
+
+	result, err = dt.handleSearchTool(ctx, SearchToolArgs{})
+	require.NoError(t, err)
+	assert.NotContains(t, result.Output, `"read_file"`, "search_tool only offers what add_tool can still activate")
+}
+
+func catalogNames(catalog []tools.Tool) []string {
+	names := make([]string, 0, len(catalog))
+	for _, tool := range catalog {
+		names = append(names, tool.Name)
+	}
+	return names
+}

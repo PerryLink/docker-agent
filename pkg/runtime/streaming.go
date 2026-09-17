@@ -47,6 +47,7 @@ type streamResult struct {
 	ReasoningContent  string
 	ThinkingSignature string
 	ThoughtSignature  []byte
+	OpenAIResponse    *chat.OpenAIResponse
 	ResponseStarted   bool
 	// Media accumulates every [chat.MediaDelta] streamed during the turn
 	// (e.g. generated images). Populated regardless of provider — see
@@ -114,6 +115,7 @@ func handleStream(ctx context.Context, cancelStream context.CancelCauseFunc, str
 	var fullReasoningContent strings.Builder
 	var thinkingSignature string
 	var thoughtSignature []byte
+	var openAIResponse *chat.OpenAIResponse
 	var toolCalls []tools.ToolCall
 	var media []chat.MediaDelta
 	var messageUsage *chat.Usage
@@ -248,6 +250,10 @@ mainLoop:
 			}
 			choice := response.Choices[0]
 
+			if choice.Delta.OpenAIResponse != nil {
+				openAIResponse = choice.Delta.OpenAIResponse
+			}
+
 			if len(choice.Delta.ThoughtSignature) > 0 {
 				responseStarted = true
 				thoughtSignature = choice.Delta.ThoughtSignature
@@ -339,6 +345,7 @@ mainLoop:
 						slog.WarnContext(ctx, "Dropping tool calls from refused turn",
 							"agent", a.Name(), "tool_calls", len(toolCalls))
 						toolCalls = nil
+						openAIResponse = nil
 					}
 				} else {
 					applyXMLFallback()
@@ -352,6 +359,7 @@ mainLoop:
 					ReasoningContent:  fullReasoningContent.String(),
 					ThinkingSignature: thinkingSignature,
 					ThoughtSignature:  thoughtSignature,
+					OpenAIResponse:    openAIResponse,
 					Media:             media,
 					Stopped:           len(toolCalls) == 0, // stop only when there are no tool calls to execute
 					FinishReason:      finishReason,
@@ -450,6 +458,7 @@ mainLoop:
 		ReasoningContent:  fullReasoningContent.String(),
 		ThinkingSignature: thinkingSignature,
 		ThoughtSignature:  thoughtSignature,
+		OpenAIResponse:    openAIResponse,
 		Media:             media,
 		Stopped:           stoppedNoToolCalls,
 		FinishReason:      finishReason,

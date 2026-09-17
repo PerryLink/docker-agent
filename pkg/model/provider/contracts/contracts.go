@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
+	"github.com/docker/docker-agent/pkg/model/provider/providerutil"
 	"github.com/docker/docker-agent/pkg/modelinfo"
 	"github.com/docker/docker-agent/pkg/modelsdev"
 	"github.com/docker/docker-agent/pkg/rag/types"
@@ -77,6 +78,23 @@ func (c *Config) ImageOutputEnabled(ctx context.Context) bool {
 		override = caps.Image
 	}
 	return modelinfo.ResolveOutputImage(ctx, c.ModelOptions.ModelsDevStore(), c.ID(), override)
+}
+
+// NativeToolSearchEnabled reports whether provider_opts.native_tool_search
+// opts this model into provider-hosted tool search. Strictly opt-in and gated
+// to verified endpoints (see [modelinfo.SupportsHostedToolSearch]); only then
+// do [tools.Tool.InCatalog] tools reach the provider through tool search. A
+// user-supplied base_url means an OpenAI-compatible server, not
+// api.openai.com, and is excluded like elsewhere in the openai provider; the
+// resolved [Config.BaseURL] is deliberately not consulted so tests can point
+// the SDK at a local server. An explicit api_type of openai_chatcompletions
+// routes off the Responses API, which alone serves tool_search.
+func (c *Config) NativeToolSearchEnabled() bool {
+	if c.ModelConfig.BaseURL != "" || c.ModelConfig.ProviderOpts["api_type"] == "openai_chatcompletions" {
+		return false
+	}
+	enabled, _ := providerutil.GetProviderOptBool(c.ModelConfig.ProviderOpts, "native_tool_search")
+	return enabled && modelinfo.SupportsHostedToolSearch(c.ModelConfig.Provider, c.ModelConfig.Model)
 }
 
 // EmbeddingResult contains an embedding and its usage.

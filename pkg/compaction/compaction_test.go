@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -683,4 +684,17 @@ func TestFirstIndexInBudget(t *testing.T) {
 			assert.Equal(t, tt.wantFirst, got)
 		})
 	}
+}
+
+func TestReportedMessageTokensIncludesPersistedReasoning(t *testing.T) {
+	t.Parallel()
+	msg := &chat.Message{
+		Usage:          &chat.Usage{OutputTokens: 200, ReasoningTokens: 150},
+		OpenAIResponse: &chat.OpenAIResponse{ID: "resp_1", Output: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`)}},
+	}
+	assert.Equal(t, int64(200), reportedMessageTokens(msg))
+	msg.OpenAIResponse.Output = nil
+	assert.Equal(t, int64(50), reportedMessageTokens(msg), "diagnostic IDs do not carry reasoning")
+	msg.OpenAIResponse = nil
+	assert.Equal(t, int64(50), reportedMessageTokens(msg))
 }

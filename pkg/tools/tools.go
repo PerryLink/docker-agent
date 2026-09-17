@@ -179,6 +179,12 @@ type Tool struct {
 	// Deferred keeps tools added after the first model call out of cached prompt prefixes.
 	Deferred             bool   `json:"-"`
 	DeferredAtToolCallID string `json:"-"`
+	// InCatalog marks a [Catalog] tool: a provider with native tool search
+	// declares it through tool search rather than as a regular tool, whether
+	// or not a toolset also lists it. SearchOnly additionally means no toolset
+	// lists it, so a provider without native tool search must drop it.
+	InCatalog  bool `json:"-"`
+	SearchOnly bool `json:"-"`
 	// ModelOverride is the per-toolset model for the LLM turn that processes
 	// this tool's results. Set automatically from the toolset "model" field.
 	ModelOverride string `json:"-"`

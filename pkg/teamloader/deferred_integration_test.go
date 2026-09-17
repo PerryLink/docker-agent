@@ -169,3 +169,44 @@ func TestDeferredToolsSurviveSlowSourceStart(t *testing.T) {
 	assert.Equal(t, "echo: hi", callTool(t, got, "remote_echo", nil))
 	assert.Empty(t, ag.DrainWarnings())
 }
+
+// The catalog is built from the same wrapped source as search_tool/add_tool,
+// so read_only and the tools allow-list apply to it before any provider sees it.
+func TestDeferredCatalogHonoursSourceFilters(t *testing.T) {
+	t.Parallel()
+
+	registry := NewToolsetRegistry(map[string]ToolsetCreator{
+		"stub": func(context.Context, latest.Toolset, string, *config.RuntimeConfig, string) (tools.ToolSet, error) {
+			return newStaticToolSet(
+				tools.Tool{Name: "read_file", Annotations: tools.ToolAnnotations{ReadOnlyHint: true}},
+				tools.Tool{Name: "list_dir", Annotations: tools.ToolAnnotations{ReadOnlyHint: true}},
+				tools.Tool{Name: "write_file"},
+			), nil
+		},
+	})
+	a := &latest.AgentConfig{
+		Instruction: "test",
+		Toolsets: []latest.Toolset{{
+			Type:     "stub",
+			ReadOnly: true,
+			Tools:    []string{"read_file", "write_file"},
+			Defer:    latest.DeferConfig{DeferAll: true},
+		}},
+	}
+	runConfig := config.RuntimeConfig{EnvProviderForTests: &noEnvProvider{}}
+	toolSets, warnings, err := getToolsForAgent(t.Context(), a, ".", &runConfig, "test-config", &loadOptions{toolsetRegistry: registry, toon: toon.Wrap, newDeferred: func() DeferredToolSet { return deferred.New() }}, js.NewJsExpander(runConfig.EnvProvider()))
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+
+	catalog, ok := tools.Find[tools.Catalog](agent.New("root", "test", agent.WithToolSets(toolSets...)).ToolSets()[1])
+	require.True(t, ok)
+	got, err := catalog.CatalogTools(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"read_file"}, namesOf(got))
+}
+
+type staticToolSet struct{ tools []tools.Tool }
+
+func newStaticToolSet(ts ...tools.Tool) *staticToolSet { return &staticToolSet{tools: ts} }
+
+func (s *staticToolSet) Tools(context.Context) ([]tools.Tool, error) { return s.tools, nil }
