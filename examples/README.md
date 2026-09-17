@@ -112,6 +112,7 @@ Examples that wire up one of the toolsets shipped with docker-agent
 | [`rag/hybrid.yaml`](rag/hybrid.yaml) | Hybrid BM25 + embeddings retrieval. |
 | [`rag/reranking.yaml`](rag/reranking.yaml) | Hybrid retrieval with a re-ranking model on top. |
 | [`rag/custom_provider.yaml`](rag/custom_provider.yaml) | Pointing the embeddings model at a custom OpenAI-compatible provider. |
+| [`rag/gemini_embeddings.yaml`](rag/gemini_embeddings.yaml) | Google Gemini embedding model with `output_dimensionality`. |
 
 ---
 

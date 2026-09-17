@@ -67,6 +67,8 @@ strategies:
       overlap: 100
 ```
 
+Supported embedding providers: **OpenAI** (and OpenAI-compatible custom providers), **DMR**, **Google Gemini** (see [Embeddings](../../providers/google/index.md#embeddings)). `vector_dimensions` must match the model's output size, e.g. 1536 for `openai/text-embedding-3-small` or 3072 for `google/gemini-embedding-2`.
+
 ### Semantic Embeddings (LLM-Enhanced)
 
 Uses an LLM to generate semantic summaries of each chunk before embedding, capturing meaning and intent. Best for code search and understanding implementations.
