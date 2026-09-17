@@ -126,7 +126,7 @@ export MISTRAL_API_KEY="..."             # Mistral
 export OPENROUTER_API_KEY="..."          # OpenRouter
 ```
 
-See [Configuration Overview](../../configuration/overview/index.md#environment-variables) for the full list of supported providers and environment variables.
+See [Provider Credentials](../../providers/overview/index.md#provider-credentials) for the full list of supported providers and authentication methods.
 
 > [!NOTE]
 > You only need the key(s) for the provider(s) you configure in your agent YAML. If you use Docker Model Runner (DMR), no API key is needed — models run locally.

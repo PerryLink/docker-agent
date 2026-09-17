@@ -132,20 +132,7 @@ Models can be referenced inline or defined in the `models` section:
 
 Resolve API keys and secrets at runtime rather than embedding them in agent configs. Fields such as environment variables, headers, and URLs can contain literal secrets; use `${env.VAR}` references or the secret-management options below. See [Managing Secrets](../../guides/secrets/index.md) for all the ways to provide credentials (env files, Docker Compose secrets, the Docker Agent env file):
 
-| Variable                   | Provider                                            |
-| -------------------------- | --------------------------------------------------- |
-| `OPENAI_API_KEY`           | OpenAI                                              |
-| `ANTHROPIC_API_KEY`        | Anthropic (override with `token_key`)               |
-| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Google Gemini (override with `token_key`)  |
-| `MISTRAL_API_KEY`          | Mistral                                             |
-| `XAI_API_KEY`              | xAI                                                 |
-| `NEBIUS_API_KEY`           | Nebius                                              |
-| `MINIMAX_API_KEY`          | MiniMax                                             |
-| `REQUESTY_API_KEY`         | Requesty                                            |
-| `OPENROUTER_API_KEY`       | OpenRouter                                          |
-| `GITHUB_TOKEN`             | GitHub Copilot (PAT with `copilot` scope)           |
-| `AZURE_API_KEY`            | Azure OpenAI (override with `token_key`)            |
-| `AWS_BEARER_TOKEN_BEDROCK` | AWS Bedrock (or the standard AWS credentials chain) |
+See [Provider Credentials](../../providers/overview/index.md#provider-credentials) for the complete list of built-in provider keys and authentication methods.
 
 **Tool Auto-Installation:**
 
