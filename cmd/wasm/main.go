@@ -8,7 +8,9 @@
 //   - Agent enumeration.
 //   - Long-lived sessions with the full agentic loop: streaming, tool
 //     calling with approval, multi-agent handoffs and transfers, fallback
-//     models, builtin hooks, remote MCP servers with OAuth elicitation.
+//     models, builtin hooks, remote MCP servers with OAuth elicitation, the
+//     portable builtin toolsets (todo, plan, memory, fetch, api, ...),
+//     JavaScript ${...} expansion, code mode, TOON and deferred tools.
 //   - A stateless chat call kept for the original demo page.
 //
 // The binary is built with:

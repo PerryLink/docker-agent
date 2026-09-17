@@ -81,10 +81,32 @@ agents:
     model: openai/gpt-4o
     add_prompt_files: [README.md]
 `, /add_prompt_files/],
+      [`
+agents:
+  root:
+    model: openai/gpt-4o
+    toolsets:
+      - type: memory
+        path: ./memory.db
+`, /memory path/],
+      [`
+agents:
+  root:
+    model: openai/gpt-4o
+    toolsets:
+      - type: openapi
+        url: ./openapi.yaml
+`, /only http\(s\) specs/],
     ];
     for (const [yaml, want] of cases) {
       await assert.rejects(dockerAgent.createSession({ yaml, env: { OPENAI_API_KEY: "k" } }), want);
     }
+  });
+
+  it("accepts the portable example with its builtin toolsets and features", async () => {
+    const yaml = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "examples", "portable-team.yaml"), "utf8");
+    const session = await dockerAgent.createSession({ yaml, env: { OPENROUTER_API_KEY: "k", GITHUB_TOKEN: "t" } });
+    await session.close();
   });
 
   it("rejects an unknown agent name and a non-https tool proxy", async () => {

@@ -190,16 +190,17 @@ func (e *echoToolSet) callCount() int {
 }
 
 // testHost is a host serving mock models plus the browser toolsets and an
-// echo toolset.
+// echo toolset. Like the browser, it builds a registry per session.
 func testHost(echo *echoToolSet, models map[string]provider.Provider) host {
 	return host{
 		providers: mockProviders(models),
-		toolsets: teamloader.NewToolsetRegistry(map[string]teamloader.ToolsetCreator{
-			"mcp": mcpCreator,
-			"echo": func(context.Context, latest.Toolset, string, *config.RuntimeConfig, string) (tools.ToolSet, error) {
+		newToolsets: func() teamloader.ToolsetRegistry {
+			creators := browserToolsetCreators()
+			creators["echo"] = func(context.Context, latest.Toolset, string, *config.RuntimeConfig, string) (tools.ToolSet, error) {
 				return echo, nil
-			},
-		}),
+			}
+			return teamloader.NewToolsetRegistry(creators)
+		},
 	}
 }
 

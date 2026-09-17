@@ -16,13 +16,16 @@ import (
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/httpclient"
+	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/modelsdev"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/teamloader"
-	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/builtin/deferred"
+	"github.com/docker/docker-agent/pkg/tools/codemode"
 	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
+	"github.com/docker/docker-agent/pkg/tools/toon"
 )
 
 // sessionOptions are the host-supplied inputs for one chat session.
@@ -46,28 +49,22 @@ type sessionOptions struct {
 
 // host holds the registries every session is built from. The browser entry
 // point uses the demo providers and the browser toolsets; tests inject
-// mocked ones.
+// mocked ones. Toolset registries are built per session so stateful
+// toolsets are shared within a team but never across sessions.
 type host struct {
-	providers *provider.Registry
-	toolsets  teamloader.ToolsetRegistry
+	providers   *provider.Registry
+	newToolsets func() teamloader.ToolsetRegistry
 }
 
-var browserHost = host{providers: demoProviders, toolsets: browserToolsets}
+var browserHost = host{providers: demoProviders, newToolsets: browserToolsets}
 
-// browserToolsets is the only toolset registry the browser build exposes:
-// remote MCP servers, reached over HTTP. Everything else needs a process,
-// a filesystem or a socket the browser does not have.
-var browserToolsets = teamloader.NewToolsetRegistry(map[string]teamloader.ToolsetCreator{"mcp": mcpCreator})
-
-func mcpCreator(ctx context.Context, toolset latest.Toolset, parentDir string, runConfig *config.RuntimeConfig, configName string) (tools.ToolSet, error) {
-	if err := checkRemoteMCP(toolset); err != nil {
-		return nil, err
-	}
-	return mcptools.Creator(ctx, toolset, parentDir, runConfig, configName)
-}
+// browserFeatures are the optional loader features the browser enables;
+// strict loading rejects configs that need any other.
+var browserFeatures = []config.Feature{config.FeatureHooks, config.FeatureCodeMode, config.FeatureToon, config.FeatureDeferredTools}
 
 // browserBuiltinHooks are the builtin hooks that neither run a process nor
-// touch the filesystem or git.
+// touch the filesystem or git; add_environment_info has a browser build that
+// reports no shell or git and reads nothing from the process env.
 var browserBuiltinHooks = []string{
 	builtins.AddContext,
 	builtins.AddDate,
@@ -109,14 +106,13 @@ func (h host) newSession(ctx context.Context, opts sessionOptions) (*embeddedcha
 	if err != nil {
 		return nil, err
 	}
-	if err := checkBrowserConfig(cfg, opts.AgentName); err != nil {
-		return nil, err
-	}
-
 	runConfig := &config.RuntimeConfig{
 		Config:                 config.Config{WorkingDir: "/"},
 		EnvProviderOverride:    environment.NewMapEnvProvider(opts.Env),
 		ModelsDevStoreOverride: modelsStore(),
+	}
+	if err := checkBrowserConfig(ctx, cfg, opts.AgentName, runConfig.EnvProvider()); err != nil {
+		return nil, err
 	}
 
 	runtimeOpts := []runtime.Opt{
@@ -150,8 +146,14 @@ func (h host) newSession(ctx context.Context, opts sessionOptions) (*embeddedcha
 		RuntimeConfig: runConfig,
 		LoadOpts: []teamloader.Opt{
 			teamloader.WithProviderRegistry(h.providers),
-			teamloader.WithToolsetRegistry(h.toolsets),
-			teamloader.WithStrict(config.FeatureHooks),
+			teamloader.WithToolsetRegistry(h.newToolsets()),
+			// ${...} in instructions is plain JavaScript over the session
+			// env: goja has no I/O, so nothing reaches the host.
+			teamloader.WithExpander(js.NewJsExpander),
+			teamloader.WithCodeMode(codemode.Wrap),
+			teamloader.WithToon(toon.Wrap),
+			teamloader.WithDeferredTools(deferred.New),
+			teamloader.WithStrict(browserFeatures...),
 		},
 		RuntimeOptions:     runtimeOpts,
 		SessionOptions:     sessionOpts,
@@ -163,9 +165,9 @@ func (h host) newSession(ctx context.Context, opts sessionOptions) (*embeddedcha
 }
 
 // checkBrowserConfig rejects config that strict loading would accept but
-// that cannot work in the browser: local files, host processes, and MCP
-// servers that are not plain remote endpoints.
-func checkBrowserConfig(cfg *latest.Config, agentName string) error {
+// that cannot work in the browser: local files, host processes, and
+// toolset declarations that point at them (see checkBrowserToolset).
+func checkBrowserConfig(ctx context.Context, cfg *latest.Config, agentName string, env environment.Provider) error {
 	if agentName != "" && !slices.ContainsFunc(cfg.Agents, func(a latest.AgentConfig) bool { return a.Name == agentName }) {
 		return fmt.Errorf("agent %q not found", agentName)
 	}
@@ -180,32 +182,13 @@ func checkBrowserConfig(cfg *latest.Config, agentName string) error {
 			errs = append(errs, fmt.Errorf("%s.cache.path: local files are not available in the browser", loc))
 		}
 		for j, ts := range a.Toolsets {
-			if ts.Type == "mcp" {
-				if err := checkRemoteMCP(ts); err != nil {
-					errs = append(errs, fmt.Errorf("%s.toolsets[%d]: %w", loc, j, err))
-				}
+			if err := checkBrowserToolset(ctx, ts, env); err != nil {
+				errs = append(errs, fmt.Errorf("%s.toolsets[%d]: %w", loc, j, err))
 			}
 		}
 		errs = append(errs, checkHooks(a.Hooks, loc+".hooks")...)
 	}
 	return errors.Join(errs...)
-}
-
-// checkRemoteMCP accepts only MCP toolsets that connect to a remote server:
-// stdio servers and catalog references need a host process, and the
-// local-only fields would otherwise be ignored silently.
-func checkRemoteMCP(ts latest.Toolset) error {
-	switch {
-	case ts.Command != "" || len(ts.Args) > 0:
-		return errors.New("stdio MCP servers need a host process; only remote servers are supported in the browser")
-	case ts.Ref != "":
-		return errors.New("MCP catalog references need the Docker MCP gateway; only remote servers are supported in the browser")
-	case ts.Remote.URL == "":
-		return errors.New("mcp toolset requires remote.url in the browser")
-	case ts.WorkingDir != "" || len(ts.Env) > 0 || ts.Config != nil || ts.Version != "" || ts.Path != "":
-		return errors.New("working_dir, env, config, version and path only apply to local MCP servers")
-	}
-	return nil
 }
 
 // checkHooks accepts only builtin hooks from browserBuiltinHooks: command

@@ -166,8 +166,8 @@ when a model's API key is missing from `env`, or when `agentName` is unknown.
 | --- | --- |
 | `yaml` | The YAML document, any config version. |
 | `agentName?` | Agent to talk to; defaults to the config's root agent. |
-| `env?` | `{OPENAI_API_KEY: "...", MCP_TOKEN: "..."}` — the session's whole environment: API keys, `${env.X}` placeholders in MCP URLs and headers. |
-| `toolProxy?` | HTTPS URL of a trusted egress proxy (`httpclient.WithEgressProxy`). Browsers cannot enforce the SSRF guard on `fetch`, so remote MCP requests are routed through it and fail closed without one (unless the toolset sets `allow_private_ips: true`). |
+| `env?` | `{OPENAI_API_KEY: "...", MCP_TOKEN: "..."}` — the session's whole environment: API keys, `${env.X}` placeholders in instructions, MCP URLs and headers. |
+| `toolProxy?` | HTTPS URL of a trusted egress proxy (`httpclient.WithEgressProxy`). Browsers cannot enforce the SSRF guard on `fetch`, so remote MCP, `fetch`, `api` and `openapi` requests are routed through it and fail closed without one (unless the toolset sets `allow_private_ips: true`). |
 | `oauthRedirectURI?` | `redirect_uri` advertised for MCP server OAuth flows; the flow itself is relayed to the host as an `elicitation` event. |
 | `autoApprove?` | Run tool calls without asking, like `--yolo`. Otherwise calls the safety policy does not clear raise a `tool_confirmation` event. |
 
@@ -242,7 +242,8 @@ runs the shared runtime. Intentional differences:
   loop ran everything unasked.
 - `type: filesystem` toolsets are rejected instead of pointing at an empty
   in-memory `/`; the legacy `url:` field on `mcp` toolsets is gone — use
-  `remote.url`.
+  `remote.url`. The portable builtins (`todo`, `plan`, `memory`, `fetch`,
+  ...) are available; see *Limits*.
 - `tool_result.output` is no longer truncated to 500 characters.
 - `usage` is still emitted once per model call, with session totals added.
 - Errors, hooks, fallbacks, compaction and delegation follow the CLI's
@@ -250,27 +251,59 @@ runs the shared runtime. Intentional differences:
 
 ## Limits
 
-What the browser build refuses, and why:
+What the browser build supports, and what it refuses and why.
 
-- **Toolsets**: only `mcp` with `remote.url`. stdio servers (`command`),
-  catalog references (`ref`) and every built-in toolset need a process, a
-  filesystem or a socket. The local-only MCP fields (`working_dir`, `env`,
-  `config`, `version`, `path`) are rejected rather than ignored.
-- **Hooks**: `type: builtin` only, and only the builtins that neither spawn
-  a process nor read files or git: `add_context`, `add_date`,
-  `add_environment_info`, `limit_large_tool_results`, `max_iterations`,
-  `redact_secrets`.
-- **Local files**: `add_prompt_files`, `cache.path`, `skills`.
-- **Features needing extra wiring**: `code_mode_tools`, `toon`, `defer`,
-  `harness`, external agents (OCI/URL references). `teamloader.WithStrict`
-  reports every unmet requirement in one error.
+### Supported
+
+| Area | In the browser |
+| --- | --- |
+| Toolsets | `mcp` (remote only), `think`, `todo`, `plan`, `memory`, `user_prompt`, `session_context`, `fetch`, `api`, `openapi`, `model_picker`. See `examples/portable-team.yaml`. |
+| Toolset options | `tools`, `readonly`, `instruction`, `model`, `toon`, `defer`, `timeout`, `allow_private_ips`. |
+| Agent features | `code_mode_tools`, sub-agents, handoffs, fallbacks, compaction, `add_date`, `add_environment_info`, structured output, `${...}` JavaScript in instructions and descriptions. |
+| Hooks | `type: builtin` only: `add_context`, `add_date`, `add_environment_info`, `limit_large_tool_results`, `max_iterations`, `redact_secrets`. |
+| Providers | OpenAI (all API variants), Anthropic and Google, registered in `providers.go`. |
+
+Stateful toolsets are scoped to the session: a `todo` with `shared: true`,
+`plan` and `memory` are one store per session, shared by every agent of the
+team. They survive `restart()` and are gone when the session closes. Two
+sessions never see each other's todos, plans or memories, and nothing is
+persisted; the `memory` instructions tell the model so instead of promising
+memory across sessions. `plan` drops its `export_plan_to_file` /
+`update_plan_from_file` tools since there is no filesystem to go through.
+`session_context` only lists the conversations of its own runtime. `memory`
+refuses `path`; `openapi` refuses a spec that is not an `http(s)` URL.
+
+`${...}` expansion is the same goja evaluator the CLI uses (`js.NewJsExpander`);
+it sees the session `env` and nothing else — no I/O, no process, no `require`.
+Slash commands are not resolved by `send()`, so the runtime's command
+evaluator is not wired.
+
+`fetch`, `api` and `openapi` share the SSRF-guarded transport with remote
+MCP: in a browser they go through `toolProxy` and fail closed without one,
+unless the toolset sets `allow_private_ips: true`.
+
+### Refused
+
+- **Toolsets**: `mcp` only with `remote.url`. stdio servers (`command`),
+  catalog references (`ref`) and the local-only MCP fields (`working_dir`,
+  `env`, `config`, `version`, `path`) are rejected rather than ignored.
+  `shell`, `script`, `filesystem`, `file`, `git`, `background_jobs`, `lsp`,
+  `tasks`, `rag`, `environment`, `scheduler`, `webhook`, `open_url`, `a2a`,
+  `mcp_catalog` and `background_agents` need a process, a filesystem, a
+  socket or the host environment and are not registered.
+- **Hooks**: `type: command` and the builtins that read files or run git.
+- **Local files**: `add_prompt_files`, `cache.path`, `skills`, `memory.path`,
+  non-HTTP `openapi.url`.
+- **Features needing extra wiring**: `harness`, external agents (OCI/URL
+  references). `teamloader.WithStrict` reports every unmet requirement in
+  one error.
 - **Providers**: OpenAI (all API variants), Anthropic and Google, registered
   in `providers.go`. The shared core registry is empty on every platform.
   Bedrock and Vertex AI also cross-compile, but are not registered here;
   cloud credentials and browser transport require additional configuration.
   Docker Model Runner discovery needs the host CLI.
 - **No persistence**: sessions live in memory for the lifetime of the tab;
-  MCP OAuth tokens are isolated in a per-session in-memory store.
+  todos, plans, memories and MCP OAuth tokens are per-session, in memory.
 - **models.dev**: the catalog baked into the binary is used; there is no
   cache directory to refresh it into.
 - **CORS**: see above. Real deployment needs a proxy for most providers.
@@ -280,12 +313,14 @@ What the browser build refuses, and why:
 | File | Purpose |
 | --- | --- |
 | `main.go` | JS API registration, `parseConfig`/`listAgents`, `createSession`, the stateless `chat()`/`abort()`. |
-| `runtime.go` | Builds an `embeddedchat.Session` from YAML with the browser registries; audits the config for host-only features. |
+| `runtime.go` | Builds an `embeddedchat.Session` from YAML with the browser registries and loader features; audits the config for host-only features. |
+| `toolsets.go` | The per-session toolset registry: remote MCP plus the portable builtins, and the per-toolset browser checks. |
 | `session.go` | `chatSession`: one conversation, its lifetime context, send/confirm/abort/restart/close. JS-agnostic, tested from Go. |
 | `events.go` | Projects runtime events onto the JS event shapes. |
 | `handle.go` | The JS session object and the lifetime of its callbacks. |
 | `bridge.go` | JS ⇄ Go value helpers, promises, awaiting JS callbacks. |
 | `providers.go` | Explicit demo provider registry (OpenAI / Anthropic / Google). |
+| `examples/` | Configs that run unchanged in the browser and in the CLI. |
 | `node/` | Node loader and JS bridge tests. |
 
 The shims that make the tree compile under `GOOS=js GOARCH=wasm` are

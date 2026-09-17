@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/chat"
-	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/embeddedchat"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -336,7 +335,7 @@ func TestSessionsDoNotShareEnvOrProcessEnv(t *testing.T) {
 			return newScriptedModel("mock/" + cfg.Model), nil
 		},
 	})
-	h := host{providers: registry, toolsets: browserToolsets}
+	h := host{providers: registry, newToolsets: browserToolsets}
 
 	a := openTestSession(t, h, sessionOptions{YAML: plainAgentYAML, Env: map[string]string{"SECRET": "a"}})
 	b := openTestSession(t, h, sessionOptions{YAML: plainAgentYAML, Env: map[string]string{"SECRET": "b"}})
@@ -425,6 +424,36 @@ agents:
     toolsets:
       - type: shell
 `},
+		"memory path": {want: "memory path: local files", yaml: `
+agents:
+  root:
+    model: mock/root
+    toolsets:
+      - type: memory
+        path: ./memory.db
+`},
+		"local openapi spec": {want: `openapi url "./openapi.yaml"`, yaml: `
+agents:
+  root:
+    model: mock/root
+    toolsets:
+      - type: openapi
+        url: ./openapi.yaml
+`},
+		"local openapi spec from env": {want: `openapi url "file:///spec.yaml"`, opts: sessionOptions{Env: map[string]string{"SPEC": "file:///spec.yaml"}}, yaml: `
+agents:
+  root:
+    model: mock/root
+    toolsets:
+      - type: openapi
+        url: ${env.SPEC}
+`},
+		"harness": {want: `feature "harness"`, yaml: `
+agents:
+  root:
+    harness:
+      type: claude-code
+`},
 		"unregistered provider": {want: `provider "openai"`, yaml: `
 agents:
   root:
@@ -498,15 +527,6 @@ agents:
 func TestCheckRemoteMCPRejectsMissingURL(t *testing.T) {
 	require.ErrorContains(t, checkRemoteMCP(latest.Toolset{Type: "mcp"}), "remote.url")
 	require.NoError(t, checkRemoteMCP(latest.Toolset{Type: "mcp", Remote: latest.Remote{URL: "https://x"}}))
-}
-
-func TestBrowserToolsetsOnlyServeRemoteMCP(t *testing.T) {
-	assert.True(t, browserToolsets.Has("mcp"))
-	for _, unsupported := range []string{"shell", "filesystem", "fetch", "memory", "script"} {
-		assert.False(t, browserToolsets.Has(unsupported), unsupported)
-	}
-	_, err := browserToolsets.CreateTool(t.Context(), latest.Toolset{Type: "mcp", Command: "npx"}, "", &config.RuntimeConfig{}, "")
-	require.ErrorContains(t, err, "stdio MCP servers")
 }
 
 func TestResumeRequest(t *testing.T) {
