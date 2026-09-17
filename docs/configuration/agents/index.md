@@ -421,14 +421,7 @@ agents:
 
 ## Named Commands
 
-> [!TIP]
-> **Full reference**
->
-> This section covers the basics. For URL commands, agent-switching commands, reusable top-level `commands:` groups, and hiding commands with `--disable-commands`, see [Custom Commands](../commands/index.md).
-
-Define reusable prompt shortcuts that can send prompts to the current agent, switch to a different sub-agent, or open a URL in the browser:
-
-> **Note:** Named slash commands execute immediately, even while the agent is processing another message. Unlike regular chat messages (which are queued), slash commands interrupt or direct the agent even while it is mid-response.
+Define prompt shortcuts under an agent's `commands:` field:
 
 ```yaml
 agents:
@@ -437,151 +430,22 @@ agents:
     instruction: You are a system administrator.
     commands:
       df: "Check how much free space I have on my disk"
-      logs: "Show me the last 50 lines of system logs"
       greet: "Say hello to ${env.USER}"
-      deploy: "Deploy ${env.PROJECT_NAME || 'app'} to ${env.ENV || 'staging'}"
-      
-      # Advanced format with agent switching
-      plan:
-        agent: planner  # Switch to the 'planner' agent
-        instruction: "Create a detailed plan for: ${args.join(\" \")}"  # Optional: send this prompt after switching
-      
-      # Agent switching without instruction - forwards remaining text as prompt
-      review:
-        agent: reviewer  # Any text after /review is sent to the reviewer agent
-
-      # URL command - opens a link in the browser instead of messaging the agent
-      docs:
-        description: "Open the documentation"
-        url: https://docs.docker.com/
 ```
+
+Invoke them in the TUI with `/df` or from the CLI with `docker agent run agent.yaml /df`. Named commands execute immediately, even while the agent is processing another message.
 
 ### Command Formats
 
-Commands support three formats:
-
-1. **Simple string format**: The string becomes the instruction sent to the current agent
-
-   ```yaml
-   df: "Check disk space"
-   ```
-
-2. **Advanced object format**: Supports agent switching and optional instructions
-
-   ```yaml
-   plan:
-     agent: planner  # Required: name of any agent defined in the team
-     instruction: "Plan: ${args.join(\" \")}"  # Optional: prompt to send after switching
-     description: "Switch to planning mode"  # Optional: shown in help text
-   ```
-
-3. **URL format**: Opens a link in the browser instead of messaging the agent
-
-   ```yaml
-   docs:
-     url: https://docs.docker.com/          # Required: URL to open
-     description: "Open the documentation"  # Optional: shown in help text
-   ```
-
-When `agent` is set without `instruction`, any text typed after the slash command (e.g., `/plan build a web app`) is forwarded as a prompt to the target agent. The target agent can be **any agent defined in the team configuration** — it does not need to be listed in the current agent's `sub_agents` array.
-
-**Argument and expansion syntax**
-
-An `instruction` string can reference the command's arguments and expand tool calls:
-
-- `${args[0]}`, `${args[1]}`, … — individual positional arguments, in the order the user typed them after the command
-- `${args.join(" ")}` — all arguments joined into a single string
-- `${tool_name({...})}` — calls a tool and inlines its return value (any tool available to the agent)
-- `!tool_name(key=value)` — legacy tool-call form: calls a tool with plain `key=value` arguments and inlines its output
+Commands can send prompts, switch agents, or open URLs. See [Custom Commands](../commands/index.md) for the field reference, argument and tool-call expansion, reusable groups, and frontend-specific behavior. Environment interpolation in other config fields is covered by [Variable Expansion](../overview/index.md#variable-expansion-in-config-fields).
 
 ### Agent-Switching Commands
 
-Commands with an `agent` field switch the active agent for that command's scope. This is useful for building workflow shortcuts where `/plan`, `/review`, `/deploy` each route the user to the appropriate specialist.
-
-```yaml
-agents:
-  root:
-    model: openai/gpt-5
-    description: Main assistant
-    instruction: You are a project coordinator.
-    sub_agents: [planner, reviewer]
-    commands:
-      # Switch to planner with a pre-filled prompt
-      plan:
-        agent: planner
-        instruction: "Create a detailed plan for: ${args.join(\" \")}"
-      # Switch to reviewer; any text after /review is forwarded
-      review:
-        agent: reviewer
-      # Simple prompt command (no switching)
-      status: "Summarize what we have accomplished so far"
-
-  planner:
-    model: openai/gpt-5
-    description: Planning specialist
-    instruction: You create detailed project plans.
-
-  reviewer:
-    model: anthropic/claude-sonnet-4-5
-    description: Code review specialist
-    instruction: You review code and suggest improvements.
-```
-
-**Agent-switching vs. `handoff`**
-
-| | Agent-switching command | `handoff` tool |
-| --- | --- | --- |
-| **Trigger** | User runs `/command` | Model calls `handoff()` |
-| **Session** | Stays in the same session | Stays in the same session |
-| **History** | Target agent sees full conversation | Target agent sees full conversation |
-| **Return** | User must explicitly switch back | Target agent can chain to another agent |
-
-**Agent-switching vs. `transfer_task`**
-
-`transfer_task` launches a **sub-session**: the root agent sends a task, the child runs in isolation, and the result is returned to the root. The root agent stays in control and the child's work is never in the main conversation. Use `transfer_task` (via `sub_agents`) when you want delegation with a clean result; use agent-switching commands when you want to *become* a different agent for the rest of the conversation.
-
-See [`examples/agent_switching_commands.yaml`](https://github.com/docker/docker-agent/blob/main/examples/agent_switching_commands.yaml) for a complete example.
-
-```bash
-# Run commands from the CLI
-$ docker agent run agent.yaml /df
-$ docker agent run agent.yaml /greet
-$ PROJECT_NAME=myapp ENV=production docker agent run agent.yaml /deploy
-```
-
-Commands use JavaScript template literal syntax (`${env.VAR}`) for environment variable interpolation. Undefined variables expand to empty strings.
-
-The same syntax is also expanded in agent and toolset instructions: `agents.<name>.instruction` and `toolsets[*].instruction` support `${env.X}` placeholders (with optional `||` defaults and ternary expressions). `agents.<name>.description` and `agents.<name>.welcome_message` also support it.
-
-Note that path-like fields (`working_dir`, `path`) primarily use a shell-style syntax (`$VAR`, `${VAR}`, `~`), and also accept `${env.X}` as an alias (though not richer JS expressions). See [Variable Expansion in Config Fields](../overview/index.md#variable-expansion-in-config-fields) for the full table.
+An `agent:` command switches to any agent in the team, in the same session. See [Agent-Switching Commands](../commands/index.md#agent-switching-commands) for examples and the comparison with `handoff` and `transfer_task`.
 
 ### URL Commands
 
-A command with a `url` field opens that URL in the user's default browser instead of sending a prompt to the agent. Any URI scheme the OS knows how to dispatch works — both standard web URLs and custom schemes such as `docker-desktop://` for deep links. URL commands are TUI-only — they have no effect when run from the CLI.
-
-```yaml
-agents:
-  root:
-    model: openai/gpt-5
-    description: An agent with handy URL shortcuts.
-    instruction: You are a helpful assistant.
-    commands:
-      feedback:
-        description: "Open the feedback site for this session"
-        url: https://example.com/feedback?session={{session_id}}
-      docs:
-        description: "Open the documentation"
-        url: https://docs.docker.com/
-      desktop:
-        description: "Open this session in Docker Desktop"
-        url: docker-desktop://dashboard/session/{{session_id}}
-```
-
-The `{{session_id}}` token is replaced at invocation time with the current session ID (URL-query-escaped so it can't break the URL or inject extra query parameters), letting a command deep-link to something scoped to the conversation. This token deliberately uses `{{...}}` rather than the `${...}` JS-expansion syntax, since the session ID is only known at dispatch time.
-
-URLs are validated before being handed to the OS opener: a parseable URL with a non-empty scheme is required, and flag-like inputs (those starting with `-`) are rejected to prevent argument injection.
-
-See [`examples/url_commands.yaml`](https://github.com/docker/docker-agent/blob/main/examples/url_commands.yaml) for a complete example.
+A `url:` command opens a browser in the full TUI. See [URL Commands](../commands/index.md#url-commands) for session-ID substitution, validation, and CLI/lean-TUI behavior.
 
 ## Read-Only Agents
 
