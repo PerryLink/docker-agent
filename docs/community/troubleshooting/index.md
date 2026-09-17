@@ -128,22 +128,7 @@ $ docker agent run config.yaml --otel
 
 ### API keys not set
 
-Each model provider requires its own API key as an environment variable:
-
-| Provider      | Environment Variable                                |
-| ------------- | --------------------------------------------------- |
-| OpenAI        | `OPENAI_API_KEY`                                    |
-| Anthropic     | `ANTHROPIC_API_KEY`                                 |
-| Google Gemini | `GOOGLE_API_KEY` or `GEMINI_API_KEY`                |
-| Mistral       | `MISTRAL_API_KEY`                                   |
-| xAI           | `XAI_API_KEY`                                       |
-| Nebius        | `NEBIUS_API_KEY`                                    |
-| MiniMax       | `MINIMAX_API_KEY`                                   |
-| Requesty      | `REQUESTY_API_KEY`                                  |
-| OpenRouter    | `OPENROUTER_API_KEY`                                |
-| GitHub Copilot | `GITHUB_TOKEN` or `GH_TOKEN` (PAT with `copilot` scope)          |
-| Azure OpenAI  | `AZURE_API_KEY` (override with `token_key`)         |
-| AWS Bedrock   | `AWS_BEARER_TOKEN_BEDROCK` or AWS credentials chain |
+Check that your provider's credentials are available to the process running Docker Agent. For example, OpenAI uses `OPENAI_API_KEY` and Anthropic uses `ANTHROPIC_API_KEY`. Other providers use different variables, account login, or a credentials chain; local models may need no key. See [Provider Credentials](../../providers/overview/index.md#provider-credentials) for the complete mapping.
 
 ```bash
 # Verify your keys are set

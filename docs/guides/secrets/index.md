@@ -40,17 +40,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 docker agent run agent.yaml
 ```
 
-Common variables:
-
-| Variable | Provider |
-| --- | --- |
-| `OPENAI_API_KEY` | OpenAI |
-| `ANTHROPIC_API_KEY` | Anthropic |
-| `GOOGLE_API_KEY` | Google Gemini |
-| `MISTRAL_API_KEY` | Mistral |
-| `OPENROUTER_API_KEY` | OpenRouter |
-| `XAI_API_KEY` | xAI |
-| `NEBIUS_API_KEY` | Nebius |
+See [Provider Credentials](../../providers/overview/index.md#provider-credentials) for the full list of provider-specific environment variables and authentication methods.
 
 MCP tools may require additional variables. For example, the GitHub MCP server needs `GITHUB_PERSONAL_ACCESS_TOKEN`. These are passed to tools via the `env` field in your config:
 
