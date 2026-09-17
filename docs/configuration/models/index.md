@@ -616,27 +616,4 @@ See [Local Models](../../providers/local/index.md) for more examples of custom e
 
 ## Inheriting from Provider Definitions
 
-Models can reference a named provider to inherit shared defaults. Model-level settings always take precedence:
-
-```yaml
-providers:
-  my_anthropic:
-    provider: anthropic
-    token_key: MY_ANTHROPIC_KEY
-    max_tokens: 16384
-    thinking_budget: 8192
-    temperature: 0.5
-
-models:
-  claude:
-    provider: my_anthropic
-    model: claude-sonnet-4-5
-    # Inherits max_tokens, thinking_budget, temperature from provider
-
-  claude_fast:
-    provider: my_anthropic
-    model: claude-haiku-4-5
-    thinking_budget: 1024  # Overrides provider default
-```
-
-See [Provider Definitions](../../providers/custom/index.md) for the full list of inheritable properties.
+Models can reference a named provider to inherit shared defaults. Model-level settings take precedence. See [Default Inheritance](../../providers/custom/index.md#default-inheritance) for a complete example and the special precedence rules for `compaction_model`, and [Provider Properties](../../providers/custom/index.md#provider-properties) for the inheritable fields.
