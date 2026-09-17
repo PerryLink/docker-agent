@@ -315,3 +315,19 @@ func TestInstrumentProviderForwardsRebuilder(t *testing.T) {
 	assert.Same(t, p, clone)
 	assert.Equal(t, 1, calls)
 }
+
+type instrumentContextProvider struct{ instrumentTestProvider }
+
+func (*instrumentContextProvider) ContextWindow(context.Context) (int64, error) { return 8192, nil }
+
+func TestContextWindowResolverThroughInstrumentation(t *testing.T) {
+	t.Parallel()
+	assert.Nil(t, ContextWindowResolver(nil))
+	assert.Nil(t, ContextWindowResolver(instrumentProvider(&instrumentTestProvider{})))
+	wrapped := instrumentProvider(&instrumentContextProvider{})
+	resolver := ContextWindowResolver(wrapped)
+	require.NotNil(t, resolver)
+	n, err := resolver(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(8192), n)
+}
