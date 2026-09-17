@@ -27,6 +27,7 @@ const (
 	ToolNameListBackgroundAgents = "list_background_agents"
 	ToolNameViewBackgroundAgent  = "view_background_agent"
 	ToolNameStopBackgroundAgent  = "stop_background_agent"
+	ToolNameWaitBackgroundAgents = "wait_background_agents"
 )
 
 const (
@@ -134,6 +135,7 @@ type task struct {
 	taskDesc  string
 
 	cancel    context.CancelFunc
+	done      chan struct{} // Closed after execution and cleanup, not when cancellation is requested.
 	startTime time.Time
 	status    atomic.Int32
 	result    string
@@ -279,8 +281,10 @@ func (h *Handler) pruneCompleted() {
 func (h *Handler) pruneCompletedLocked() {
 	var toDelete []string
 	h.tasks.Range(func(id string, t *task) bool {
-		if s := t.loadStatus(); s != taskRunning {
+		select {
+		case <-t.done:
 			toDelete = append(toDelete, id)
+		default:
 		}
 		return true
 	})
@@ -364,12 +368,14 @@ func (h *Handler) HandleRun(ctx context.Context, sess *session.Session, toolCall
 		agentName: params.Agent,
 		taskDesc:  params.Task,
 		cancel:    cancel,
+		done:      make(chan struct{}),
 		startTime: time.Now(),
 	}
 	t.storeStatus(taskRunning)
 	h.tasks.Store(taskID, t)
 
 	h.wg.Go(func() {
+		defer close(t.done)
 		defer h.releaseAdmission()
 		defer cancel()
 
@@ -553,6 +559,7 @@ func (h *Handler) RegisterHandlers(register func(name string, fn func(context.Co
 	register(ToolNameListBackgroundAgents, h.HandleList)
 	register(ToolNameViewBackgroundAgent, h.HandleView)
 	register(ToolNameStopBackgroundAgent, h.HandleStop)
+	register(ToolNameWaitBackgroundAgents, h.HandleWait)
 }
 
 // New returns a lightweight ToolSet for registering background agent
@@ -578,6 +585,7 @@ Use background agent tasks to dispatch work to sub-agents concurrently.
 - **list_background_agents**: Show all tasks with status and runtime
 - **view_background_agent**: Get output and status of a task by task_id
 - **stop_background_agent**: Terminate a task by task_id
+- **wait_background_agents**: Join specified tasks and collect their results. Prefer this over polling; a timeout leaves the tasks running.
 
 **Notes**: Output capped at 10MB per task. All tasks auto-terminate when the agent stops.`
 }
@@ -592,7 +600,7 @@ func backgroundAgentTools() []tools.Tool {
 Use this to dispatch work to multiple sub-agents concurrently. Native sub-agents inherit the current
 session's safety policy and permissions; calls requiring confirmation are denied because background
 tasks are non-interactive. External harnesses enforce their own permission model. Check progress with
-view_background_agent and collect results once the task is complete.`,
+view_background_agent, or join tasks and collect results with wait_background_agents instead of polling.`,
 			Parameters:  tools.MustSchemaFor[RunBackgroundAgentArgs](),
 			Annotations: tools.ToolAnnotations{Title: "Run Background Agent"},
 		},
@@ -614,6 +622,17 @@ view_background_agent and collect results once the task is complete.`,
 			Parameters:     tools.MustSchemaFor[ViewBackgroundAgentArgs](),
 			Annotations: tools.ToolAnnotations{
 				Title:        "View Background Agent",
+				ReadOnlyHint: true,
+			},
+		},
+		{
+			Name:           ToolNameWaitBackgroundAgents,
+			RuntimeHandler: ToolNameWaitBackgroundAgents,
+			Category:       "transfer",
+			Description:    `Wait for all specified background agent tasks to finish and return their statuses and bounded outputs in task_ids order. Use this to join concurrent tasks instead of polling. Failed or stopped tasks do not end the wait early. Already-finished tasks return immediately. The timeout is shared by the whole group; timeout or cancellation of the wait does not stop the tasks. Check all_done before continuing dependent work; use view_background_agent for truncated output.`,
+			Parameters:     tools.MustSchemaFor[WaitBackgroundAgentsArgs](),
+			Annotations: tools.ToolAnnotations{
+				Title:        "Wait for Background Agents",
 				ReadOnlyHint: true,
 			},
 		},
