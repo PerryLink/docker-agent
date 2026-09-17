@@ -2097,11 +2097,14 @@ func (m *model) AppendToLastMessage(agentName, content string) tea.Cmd {
 	// Append to existing assistant message from same agent
 	if lastMsg.Type == types.MessageTypeAssistant && lastMsg.Sender == agentName {
 		if m.userHasScrolled {
-			if len(m.deferredTail) == 0 {
+			var materializeCmd tea.Cmd
+			if len(m.deferredTail) == 0 || m.deferredTailIndex != lastIdx {
+				// Flush the previous owner before buffering a different message.
+				materializeCmd = m.materializeDeferredTail()
 				m.deferredTailIndex = lastIdx
 			}
 			m.deferredTail = append(m.deferredTail, content)
-			return nil
+			return materializeCmd
 		}
 		materializeCmd := m.materializeDeferredTail()
 		cmd := m.views[lastIdx].(message.Model).AppendContent(content)
