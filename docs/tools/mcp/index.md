@@ -97,7 +97,7 @@ toolsets:
 
 | Property                | Type    | Description |
 | ----------------------- | ------- | ----------- |
-| `remote.url`            | string  | Base URL of the MCP server. |
+| `remote.url`            | string  | URL of the MCP server. Accepts `https://`, `http://`, and `unix://` (Unix domain socket) schemes. |
 | `remote.transport_type` | string  | `streamable` or `sse`. |
 | `remote.headers`        | object  | HTTP headers sent on every request. Values support `${env.VAR}` and `${headers.NAME}` placeholders, resolved per request. See [Remote MCP Servers](../../features/remote-mcp/index.md#configuration) for details. |
 | `remote.oauth`          | object  | Explicit OAuth client credentials for servers that don't support DCR. See [Remote MCP Servers](../../features/remote-mcp/index.md#oauth-for-servers-without-dynamic-client-registration). |
@@ -170,74 +170,23 @@ These properties apply to every MCP toolset regardless of flavour:
 
 ### Tool filtering
 
-```yaml
-toolsets:
-  - type: mcp
-    ref: docker:github-official
-    tools: ["list_issues", "create_issue", "get_pull_request"]
-```
-
-Whitelisting tools improves model accuracy — fewer choices means less confusion.
+Use `tools:` to expose only the operations your agent needs. See [Tool Filtering](../../configuration/tools/index.md#tool-filtering) for syntax and examples.
 
 ### Deferred loading
 
-Skip the toolset's startup cost until its tools are actually called:
-
-```yaml
-toolsets:
-  - type: mcp
-    ref: docker:github-official
-    defer: true
-  # Or defer specific tools within a toolset:
-  - type: mcp
-    ref: docker:slack
-    defer: ["list_channels", "search_messages"]
-```
+Use `defer: true` or a list of tool names to load tools on demand. See [Deferred Tool Loading](../../configuration/tools/index.md#deferred-tool-loading) for startup and discovery behavior.
 
 ### Custom instructions
 
-```yaml
-toolsets:
-  - type: mcp
-    ref: docker:github-official
-    instruction: |
-      Use these tools to manage GitHub issues.
-      Always check for existing issues before creating new ones.
-      Label new issues with 'triage' by default.
-```
+Use `instruction:` to replace or extend a toolset's guidance. See [Tool Instructions](../../configuration/tools/index.md#tool-instructions), including the `{ORIGINAL_INSTRUCTIONS}` placeholder.
 
 ### TOON-encoded outputs
 
-Re-encode verbose JSON outputs as the compact [TOON](https://github.com/alpkeskin/gotoon) format to save context budget. Typically yields 30–60% smaller payloads on list/search tools.
-
-`toon` is a regex string that is matched against tool names. Any tool whose name matches the pattern has its JSON output transparently re-encoded as TOON before it is shown to the model. The re-encoding reduces schema verbosity, which is especially useful when a model struggles with large or repetitive tool output.
-
-```yaml
-toolsets:
-  - type: mcp
-    ref: docker:github-official
-    toon: ".*"            # toonify every tool from this server
-  - type: mcp
-    command: my-server
-    toon: "list_.*,get_.*" # only toonify list_/get_ tools
-```
-
-The value is a comma-separated list of regexes (or a single regex). A tool name must match at least one pattern to be re-encoded. Setting `toon: ".*"` re-encodes all tools from that toolset.
-
-See [`examples/github-toon.yaml`](https://github.com/docker/docker-agent/blob/main/examples/github-toon.yaml) for a practical example using the GitHub MCP server.
+Use `toon:` to re-encode matching tools' JSON object outputs in a compact format. See [TOON-Encoded Tool Outputs](../../configuration/tools/index.md#toon-encoded-tool-outputs) for pattern syntax and which outputs pass through unchanged, or the [GitHub TOON example](https://github.com/docker/docker-agent/blob/main/examples/github-toon.yaml).
 
 ### Per-toolset model routing
 
-Process tool results from this toolset with a different (typically cheaper / faster) model. The override is one-shot — subsequent turns return to the agent's primary model:
-
-```yaml
-toolsets:
-  - type: mcp
-    ref: docker:github-official
-    model: openai/gpt-4o-mini
-```
-
-See [Per-Toolset Model Routing](../../configuration/tools/index.md#per-toolset-model-routing).
+Use `model:` to process tool results with a different model for one turn. See [Per-Toolset Model Routing](../../configuration/tools/index.md#per-toolset-model-routing) for examples and how competing overrides are resolved.
 
 ### Lifecycle (auto-restart, profiles)
 

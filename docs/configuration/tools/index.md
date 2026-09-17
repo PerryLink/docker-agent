@@ -70,73 +70,15 @@ Extend agents with external tools via the [Model Context Protocol](https://model
 
 ### Docker MCP (Recommended)
 
-Run MCP servers as secure Docker containers via the [MCP Gateway](https://github.com/docker/mcp-gateway):
-
-```yaml
-toolsets:
-  - type: mcp
-    ref: docker:duckduckgo # web search
-  - type: mcp
-    ref: docker:github-official # GitHub integration
-```
-
-Browse available tools at the [Docker MCP Catalog](https://hub.docker.com/search?q=&type=mcp).
-
-| Property      | Type   | Description                                                      |
-| ------------- | ------ | ---------------------------------------------------------------- |
-| `ref`         | string | Docker MCP reference (`docker:name`)                             |
-| `tools`       | array  | Optional: only expose these tools                                |
-| `instruction` | string | Custom instructions injected into the agent's context            |
-| `config`      | any    | MCP server-specific configuration (passed during initialization) |
-| `working_dir` | string | Working directory for the MCP gateway subprocess. Only applies when the catalog entry runs as a local process (not remote). Relative paths are resolved against the agent's working directory. Supports `${env.VAR}` (canonical), plus `~` and shell-style `$VAR`/`${VAR}` expansion ([details](../overview/index.md#variable-expansion-in-config-fields)). |
+Use `ref: docker:<name>` to run a catalog server through the MCP Gateway. See [Docker MCP](../../tools/mcp/index.md#docker-mcp-recommended) for examples and the property reference.
 
 ### Local MCP (stdio)
 
-Run MCP servers as local processes communicating over stdin/stdout:
-
-```yaml
-toolsets:
-  - type: mcp
-    command: python
-    args: ["-m", "mcp_server"]
-    tools: ["search", "fetch"]
-    env:
-      API_KEY: value
-```
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `command` | string | Command to execute the MCP server |
-| `args` | array | Command arguments |
-| `tools` | array | Optional: only expose these tools |
-| `env` | object | Environment variables (key-value pairs) |
-| `working_dir` | string | Working directory for the MCP server process. Relative paths are resolved against the agent's working directory. Defaults to the agent's working directory when omitted. Supports `${env.VAR}` (canonical), plus `~` and shell-style `$VAR`/`${VAR}` expansion ([details](../overview/index.md#variable-expansion-in-config-fields)). |
-| `instruction` | string | Custom instructions injected into the agent's context |
-| `version` | string | Package reference for [auto-installing](#auto-installing-tools) the command binary |
+Use `command`, `args`, and `env` to run a local subprocess. See [Local MCP](../../tools/mcp/index.md#local-mcp-stdio) for the property reference; [auto-installation](#auto-installing-tools) can provide the command binary.
 
 ### Remote MCP (Streamable HTTP / SSE)
 
-Connect to MCP servers over the network:
-
-```yaml
-toolsets:
-  - type: mcp
-    remote:
-      url: "https://mcp-server.example.com"
-      transport_type: "streamable"
-      headers:
-        Authorization: "Bearer your-token"
-    # Optional: allow OAuth helper requests to reach private/internal IPs.
-    allow_private_ips: true
-    tools: ["search_web", "fetch_url"]
-```
-
-| Property                | Type    | Description                                                                                                           |
-| ----------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
-| `remote.url`            | string  | URL of the MCP server. Accepts `https://`, `http://`, and `unix://` (Unix domain socket) schemes.                     |
-| `remote.transport_type` | string  | `streamable` or `sse`                                                                                                 |
-| `remote.headers`        | object  | HTTP headers sent on every request. Values support `${env.VAR}` and `${headers.NAME}` placeholders, resolved per request. `${env.VAR}` reads an environment variable; `${headers.NAME}` forwards a header from the caller's incoming request (useful when Docker Agent runs as an API server). |
-| `allow_private_ips`     | boolean | Permit remote MCP OAuth helper requests to dial non-public IP addresses. Use only for trusted internal servers.        |
+Use `remote.url` to connect to a hosted MCP server or Unix socket. See [Remote MCP](../../tools/mcp/index.md#remote-mcp-streamable-http--sse) for the property reference, and [Remote MCP Servers](../../features/remote-mcp/index.md) for OAuth recipes and public endpoints.
 
 ## Auto-Installing Tools
 
