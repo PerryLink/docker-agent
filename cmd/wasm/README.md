@@ -1,12 +1,13 @@
 # docker-agent in the browser (js/wasm)
 
-`cmd/wasm` is a `GOOS=js GOARCH=wasm` entry point that exposes a thin slice
-of docker-agent — config parsing and a single-round streaming chat — to a
-JavaScript host (a browser tab or Node).
+`cmd/wasm` is a `GOOS=js GOARCH=wasm` entry point that exposes docker-agent
+to a JavaScript host (a browser tab or Node): config parsing, and long-lived
+agent sessions running the **same `pkg/runtime` the CLI uses**, assembled
+through `pkg/embeddedchat` with browser-safe registries.
 
-It is **not** a port of the full agent. It is a proof-of-concept for the
-"realistic plan" outlined when we surveyed which parts of docker-agent could
-even be cross-compiled to wasm. See the *Limits* section below.
+It is not a port of the full CLI: everything that needs a host process, a
+filesystem or a socket is left out, and configs that ask for it are rejected
+when the session is created. See *Limits*.
 
 ## Build
 
@@ -19,20 +20,25 @@ GOOS=js GOARCH=wasm go build -o cmd/wasm/web/docker-agent.wasm ./cmd/wasm
 cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/wasm/web/wasm_exec.js
 ```
 
-The output is a ~75 MB `.wasm`. It includes the entire YAML parser, three LLM
-provider clients (OpenAI, Anthropic, Google) and their dependencies. With
-`tinygo` or `-ldflags="-s -w"` plus `wasm-opt` you can roughly halve it; we
-have not optimised the size.
+The output is a large `.wasm` (the runtime, the YAML parser, three LLM
+provider clients and the MCP client). With `-ldflags="-s -w"` plus
+`wasm-opt` you can roughly halve it; we have not optimised the size.
 
-## Run (Node smoke test)
+## Run (Node)
 
 ```sh
+# Go tests of the runtime bridge, with a mocked provider registry.
+task test-wasm-js
+
+# Smoke test of parseConfig/listAgents against the built binary.
 node cmd/wasm/smoke_test.js
+
+# JS bridge tests: session handles, chat(), failure modes.
+node --test cmd/wasm/node/bridge_test.js
 ```
 
-Prints the parsed config of a small two-agent YAML and exits 0. This proves
-that the Go runtime starts under wasm, that `globalThis.dockerAgent` gets
-registered, and that `parseConfig` returns the expected shape.
+Both Node scripts load `web/docker-agent.wasm` through `node/boot.js`, which
+picks `wasm_exec.js` from `go env GOROOT` (or `$GOROOT`).
 
 ## Run (browser, with OpenRouter sign-in)
 
@@ -101,10 +107,12 @@ agents:
 ```
 
 When the user clicks **Run**, the page passes the stored key as
-`env.OPENROUTER_API_KEY` to `dockerAgent.chat(...)`, the existing
+`env.OPENROUTER_API_KEY`. That map is the *only* environment the session
+sees (`RuntimeConfig.EnvProviderOverride`): nothing is copied into the
+process environment, and two sessions never see each other's keys.
 `pkg/model/provider/openai` reads it via `env.Get(ctx, cfg.TokenKey)`, and
-the Go HTTP transport (mapped to `fetch` under js/wasm) sends the
-request. **Same code path the CLI uses** — no special browser-only branch.
+the Go HTTP transport (mapped to `fetch` under js/wasm) sends the request.
+**Same code path the CLI uses** — no special browser-only branch.
 
 ### Bring-your-own-key fallback
 
@@ -116,7 +124,7 @@ fields are mostly there for use against a self-hosted proxy.
 
 ## JavaScript API
 
-Once the wasm boots, two functions are exported on `globalThis.dockerAgent`:
+Once the wasm boots, `globalThis.dockerAgent` offers:
 
 ### `parseConfig(yamlString) -> object`
 
@@ -141,88 +149,173 @@ agents:
 
 Throws a JS `Error` on invalid YAML / unsupported version / failed validation.
 
-### `chat({yaml, agentName?, env?, messages}, onEvent) -> Promise`
+### `listAgents(yamlString) -> [{name, model, description, instruction}]`
 
-Asynchronous. Loads the config, picks the agent (or the only one), builds
-its model provider, and opens one streaming chat completion.
+Synchronous; same loading and error behaviour as `parseConfig`.
 
-- `yaml` — the YAML document, same as for `parseConfig`.
-- `agentName` — required if the config defines more than one agent.
-- `env` — `{ OPENAI_API_KEY: "...", ANTHROPIC_API_KEY: "...", GEMINI_API_KEY: "..." }`.
-  Whatever your model needs.
-- `messages` — array of `{role, content}` objects, OpenAI-style. The agent's
-  `instruction` is automatically prepended as a `system` message if you
-  haven't already supplied one.
-- `onEvent(ev)` — called from Go for every stream event:
-  - `{type: "delta",  content?: string, reasoning?: string}`
-  - `{type: "finish", reason: string}`
+### `createSession(options, onEvent) -> Promise<session>`
 
-Resolves to `{message: {role, content, reasoning, finish}}` once the stream
-ends. Rejects with an `Error` on any failure.
+Loads the config with the browser registries, builds the runtime and starts
+an empty conversation. Rejects — before anything touches the network —
+when the config needs something the browser cannot provide (see *Limits*),
+when a model's API key is missing from `env`, or when `agentName` is unknown.
+
+`options`:
+
+| Field | Meaning |
+| --- | --- |
+| `yaml` | The YAML document, any config version. |
+| `agentName?` | Agent to talk to; defaults to the config's root agent. |
+| `env?` | `{OPENAI_API_KEY: "...", MCP_TOKEN: "..."}` — the session's whole environment: API keys, `${env.X}` placeholders in MCP URLs and headers. |
+| `toolProxy?` | HTTPS URL of a trusted egress proxy (`httpclient.WithEgressProxy`). Browsers cannot enforce the SSRF guard on `fetch`, so remote MCP requests are routed through it and fail closed without one (unless the toolset sets `allow_private_ips: true`). |
+| `oauthRedirectURI?` | `redirect_uri` advertised for MCP server OAuth flows; the flow itself is relayed to the host as an `elicitation` event. |
+| `autoApprove?` | Run tool calls without asking, like `--yolo`. Otherwise calls the safety policy does not clear raise a `tool_confirmation` event. |
+
+The trusted proxy receives the target URL in the `url` query parameter, with
+the original method, body and credentials. It must enforce destination IP
+policy and **must not follow redirects**. Relay target redirects with the same
+status, move `Location` to `X-Docker-Agent-Location`, and expose that header
+through CORS. Go then enforces the caller's redirect and credential policies.
+Only configure infrastructure you trust with the target credentials.
+
+The session handle:
+
+| Method | Behaviour |
+| --- | --- |
+| `send(prompt) -> Promise<{message, usage?}>` | Runs one turn: the full agentic loop with streaming, tool calls, handoffs and fallbacks. Rejects with "a run is already active" while a turn is running, with "session is restarting" while `restart()` winds the previous turn down, with "chat aborted" when cut short, or with the runtime's error. `usage` sums this turn's model calls. |
+| `confirm(decision, reason?)` | Answers the pending `tool_confirmation`. `decision` is `"approve"`, `"approve_tool"` (needs `toolName`), `"approve_balanced"`, `"approve_autonomous"` or `"reject"`; also accepts `true`/`false` or `{decision, toolName?, reason?}`. Rejects with "no tool confirmation is pending" when there is nothing to answer, e.g. before any turn or once the call completed. |
+| `respondToElicitation({id, action, content?})` | Answers an `elicitation` (`accept`, `decline`, `cancel`); `content` is the form payload or the OAuth `{code, state}`. |
+| `restart()` | Aborts the running turn, waits for it to stop and starts a fresh conversation on the same runtime. Sends are refused until the new conversation is in place. |
+| `abort()` | Cuts the running turn short; the session stays usable. Synchronous, and effective even when called right after `send()`. |
+| `close()` | Aborts, releases the runtime and its MCP connections. Idempotent; later calls reject with "session is closed". |
+
+The runtime stays blocked on an unanswered `tool_confirmation` or
+`elicitation` until the host answers, aborts, restarts or closes. Without
+an `onEvent` handler nobody could answer, so such a session declines them
+all. Return values from a session's `onEvent` are ignored; a returned
+Promise is not awaited.
+
+### `chat({...options, messages}, onEvent) -> Promise<{message, usage?}>`
+
+The original stateless call, kept for the demo page: one session per call,
+seeded with `messages` (OpenAI-style, `tool_calls` and `tool_call_id`
+included, so a client-side history replays faithfully). The last message
+must be from the user; it is the prompt. Because there is no handle to
+answer prompts with, the `onEvent` return value does: return `true`, a
+decision string or `{decision, ...}` for `tool_confirmation`, and
+`{action, content?}` for `elicitation`; a Promise is awaited. Anything else
+— including no handler at all — declines, so the call never hangs.
+
+### `abort() -> void`
+
+Cancels the in-flight `chat()` call (only one runs at a time; a new call
+cancels the previous). Safe to call before the call has started running.
+
+### Events
+
+`onEvent` receives, for both APIs:
+
+| Event | Fields |
+| --- | --- |
+| `delta` | `content?` or `reasoning?` — a streamed chunk. |
+| `tool_call_delta` | `id, name, arguments` — a streamed chunk of a tool call's arguments. |
+| `tool_call` | `id, name, args` — the call is about to run. |
+| `tool_confirmation` | `id, name, args` — the runtime waits for `confirm()`. |
+| `tool_output` | `id, name, output` — incremental output of a running call. |
+| `tool_result` | `id, name, output, is_error` |
+| `tool_blocked` | `id, name, reason` — a `pre_tool_use` hook denied the call. |
+| `elicitation` | `id, message, mode, url, schema, meta` — an MCP server asks for input or OAuth; answer with `respondToElicitation()`. |
+| `handoff` | `from, to` — `handoff`, `transfer_task` (and its return). |
+| `fallback` | `from, to, attempt, reason` — the model chain moved on. |
+| `usage` | `input_tokens, output_tokens` for that model call, plus `context_length, context_limit, cost` for the session. |
+| `warning` | `message` |
+| `error` | `message` — the turn failed; the promise rejects with the same message. |
+| `finish` | `reason: "stop"` — the turn completed. |
+
+### Differences from the previous bespoke loop
+
+The earlier `cmd/wasm` re-implemented the agent loop in 800 lines; it now
+runs the shared runtime. Intentional differences:
+
+- Tool calls go through the runtime's approval chain. Without
+  `autoApprove`, non-read-only tools raise `tool_confirmation`; the old
+  loop ran everything unasked.
+- `type: filesystem` toolsets are rejected instead of pointing at an empty
+  in-memory `/`; the legacy `url:` field on `mcp` toolsets is gone — use
+  `remote.url`.
+- `tool_result.output` is no longer truncated to 500 characters.
+- `usage` is still emitted once per model call, with session totals added.
+- Errors, hooks, fallbacks, compaction and delegation follow the CLI's
+  behaviour exactly, since it is the same code.
 
 ## Limits
 
-These are not bugs to fix; they are direct consequences of `GOOS=js`:
+What the browser build refuses, and why:
 
-- **No tools, no MCP, no hooks, no sub-agent handoffs.** Anything that needs
-  `os/exec` or local file I/O is excluded from the build.
-- **No sessions.** `pkg/session` and `pkg/memory/database/sqlite` pull in
-  `modernc.org/libc` which does not have a js port. The browser caller is
-  responsible for keeping the message history.
-- **Explicit provider selection.** The demo registers OpenAI, Anthropic and
-  Google in `providers.go`. The shared core provider registry is empty on
-  every platform; embedders register only the implementations they need.
-- **No Docker Model Runner, no Bedrock, no Vertex AI.** Same reason —
-  `dmr` shells out, `bedrock` and `vertexai` pull in cloud SDKs that don't
-  cross-compile to wasm.
-- **No Docker Desktop integration.** `pkg/desktop` has stubs for js that
-  return empty paths and refuse to dial.
-- **CORS.** Mentioned above. Real deployment needs a proxy.
+- **Toolsets**: only `mcp` with `remote.url`. stdio servers (`command`),
+  catalog references (`ref`) and every built-in toolset need a process, a
+  filesystem or a socket. The local-only MCP fields (`working_dir`, `env`,
+  `config`, `version`, `path`) are rejected rather than ignored.
+- **Hooks**: `type: builtin` only, and only the builtins that neither spawn
+  a process nor read files or git: `add_context`, `add_date`,
+  `add_environment_info`, `limit_large_tool_results`, `max_iterations`,
+  `redact_secrets`.
+- **Local files**: `add_prompt_files`, `cache.path`, `skills`.
+- **Features needing extra wiring**: `code_mode_tools`, `toon`, `defer`,
+  `harness`, external agents (OCI/URL references). `teamloader.WithStrict`
+  reports every unmet requirement in one error.
+- **Providers**: OpenAI (all API variants), Anthropic and Google, registered
+  in `providers.go`. The shared core registry is empty on every platform.
+  Bedrock and Vertex AI also cross-compile, but are not registered here;
+  cloud credentials and browser transport require additional configuration.
+  Docker Model Runner discovery needs the host CLI.
+- **No persistence**: sessions live in memory for the lifetime of the tab;
+  MCP OAuth tokens are isolated in a per-session in-memory store.
+- **models.dev**: the catalog baked into the binary is used; there is no
+  cache directory to refresh it into.
+- **CORS**: see above. Real deployment needs a proxy for most providers.
 
-## Where the cross-compilation work lives
-
-The shims that make the existing tree compile under `GOOS=js GOARCH=wasm`
-are intentionally tiny:
+## Where the code lives
 
 | File | Purpose |
 | --- | --- |
-| `pkg/cache/lock_js.go` | No-op file-lock stubs (single-threaded js). |
-| `pkg/userconfig/lock_js.go` | No-op file-lock stubs for the user config file (single-threaded js). |
-| `pkg/desktop/sockets_js.go` | Returns empty Docker Desktop paths. |
-| `pkg/desktop/connection_js.go` | Refuses Unix-socket / named-pipe dials. |
-| `pkg/desktop/connection_other.go` | Build tag updated to `!windows && !js`. |
-| `cmd/wasm/providers.go` | Explicit demo provider registry (OpenAI / Anthropic / Google). |
+| `main.go` | JS API registration, `parseConfig`/`listAgents`, `createSession`, the stateless `chat()`/`abort()`. |
+| `runtime.go` | Builds an `embeddedchat.Session` from YAML with the browser registries; audits the config for host-only features. |
+| `session.go` | `chatSession`: one conversation, its lifetime context, send/confirm/abort/restart/close. JS-agnostic, tested from Go. |
+| `events.go` | Projects runtime events onto the JS event shapes. |
+| `handle.go` | The JS session object and the lifetime of its callbacks. |
+| `bridge.go` | JS ⇄ Go value helpers, promises, awaiting JS callbacks. |
+| `providers.go` | Explicit demo provider registry (OpenAI / Anthropic / Google). |
+| `node/` | Node loader and JS bridge tests. |
 
-Everything else compiles unchanged because docker-agent already had the
-`os/exec`, sandbox, sound, audio, server, browser, keyring code well-isolated
-behind their own packages — the wasm entry just doesn't import them.
+The shims that make the tree compile under `GOOS=js GOARCH=wasm` are
+intentionally tiny (`pkg/cache/lock_js.go`, `pkg/userconfig/lock_js.go`,
+`pkg/desktop/*_js.go`, `pkg/httpclient/egress_js.go`, ...); everything else
+compiles unchanged because the `os/exec`, sandbox, sound, audio, server,
+browser and keyring code is isolated behind packages the wasm entry does not
+import.
 
 ## Embedding with fewer providers
 
 `pkg/model/provider` shares its registry implementation between native and
 js/wasm builds and imports no concrete SDK-backed providers. Its
 `EmptyRegistry()` contains no providers: code that constructs models must pass
-an explicit registry. The deprecated `DefaultRegistry()` is an alias kept for
-source compatibility. The demo retains its provider set through
+an explicit registry. The demo retains its provider set through
 `demoProviders`; a smaller application can register just Anthropic:
 
 ```go
 registry := provider.NewRegistry(map[string]provider.Factory{
-    "anthropic": func(ctx context.Context, cfg *latest.ModelConfig,
-        env environment.Provider, opts ...options.Opt) (provider.Provider, error) {
-        return anthropic.NewClient(ctx, cfg, env, opts...)
-    },
+    "anthropic": provider.Adapt(anthropic.NewClient),
 })
 ```
 
 Pass it to `teamloader.WithProviderRegistry(registry)` when loading YAML and
 `runtime.WithProviderRegistry(registry)` when constructing a local runtime, so
-runtime model switching uses the same provider set. Register toolsets separately
-and use `teamloader.WithStrict()` to reject unsupported configuration features.
-Do not import `pkg/teamloader/defaults` or `pkg/model/provider/providers` in a
-restricted bootstrap: those deliberately wire the full implementations.
-
-This changes dependency wiring, not config-version support, schemas, or MCP.
+runtime model switching uses the same provider set — `runtime.go` shows the
+full recipe, including `teamloader.WithStrict()` to reject unsupported
+configuration features. Do not import `pkg/teamloader/defaults` or
+`pkg/model/provider/providers` in a restricted bootstrap: those deliberately
+wire the full implementations.
 
 ## Sanity check
 
@@ -231,14 +324,12 @@ This changes dependency wiring, not config-version support, schemas, or MCP.
 go build ./...
 
 # Wasm build still happy.
-GOOS=js GOARCH=wasm go build -o /tmp/cagent.wasm ./cmd/wasm
+GOOS=js GOARCH=wasm go build -o cmd/wasm/web/docker-agent.wasm ./cmd/wasm
 
-# Existing tests of the touched packages still pass.
-go test ./pkg/cache/... ./pkg/desktop/... ./pkg/model/provider/...
+# Runtime bridge tests under Node's Go/WASM runner, with mocked models.
+task test-wasm-js
 
-# Provider registration and wire behavior under Node's Go/WASM runner.
-task test-wasm-providers
-
-# End-to-end runtime smoke test.
+# JS surface against the built binary.
 node cmd/wasm/smoke_test.js
+node --test cmd/wasm/node/bridge_test.js
 ```
