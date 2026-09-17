@@ -175,6 +175,13 @@ type Item struct {
 	// carry a regular message (e.g., compaction summaries).
 	Usage *chat.Usage `json:"usage,omitempty"`
 
+	// Compaction holds the provider-native compaction behind Summary, when
+	// the summary was produced server-side rather than by the LLM strategy.
+	// GetMessages attaches it to the synthetic summary message so the
+	// producing provider can replay its block; Summary stays readable for
+	// every other provider.
+	Compaction *chat.CompactionResult `json:"compaction,omitempty"`
+
 	// liveAttached marks a sub-session item appended by AddLiveSubSession
 	// in this process, i.e. a sub-session that ran live and reported its
 	// own cost through its own TokenUsageEvents. Deliberately unexported
@@ -752,6 +759,7 @@ func (s *Session) snapshotItems() []Item {
 			usage := *item.Usage
 			items[i].Usage = &usage
 		}
+		items[i].Compaction = item.Compaction.Clone()
 	}
 	return items
 }
@@ -799,6 +807,8 @@ func cloneChatMessage(m chat.Message) chat.Message {
 	if m.ThoughtSignature != nil {
 		m.ThoughtSignature = slices.Clone(m.ThoughtSignature)
 	}
+	m.ProviderState = m.ProviderState.Clone()
+	m.Compaction = m.Compaction.Clone()
 	return m
 }
 
@@ -862,11 +872,12 @@ func (s *Session) AddMessage(msg *Message) int {
 	defer s.mu.Unlock()
 	if msg != nil {
 		capToolResultContent(&msg.Message, s.MaxToolResultTokens)
-		// Transcripts never carry cache checkpoint marks: CacheControl is
-		// request-assembly state (see chat.Message.CacheControl); a mark
-		// slipping in here (e.g. echoed back by an API client) would
-		// resurface on every future prompt assembly.
+		// Transcripts never carry request-assembly marks (see
+		// chat.Message.CacheControl and TurnScoped); one slipping in here
+		// (e.g. echoed back by an API client) would resurface on every
+		// future prompt assembly.
 		msg.Message.CacheControl = false
+		msg.Message.TurnScoped = false
 	}
 	s.Messages = append(s.Messages, NewMessageItem(msg))
 	return len(s.Messages) - 1
@@ -2094,18 +2105,14 @@ func buildInvariantSystemMessages(a *agent.Agent) []chat.Message {
 	return messages
 }
 
-// summaryMessagePrefix prefixes the synthetic user message that carries a
-// compaction summary into the prompt. Shared by buildSessionSummaryMessages
-// and CompactionInput; exposed to callers via SummaryMessageContent.
-const summaryMessagePrefix = "Session Summary: "
-
 // SummaryMessageContent returns the content of the synthetic user message
 // that GetMessages emits to carry a compaction summary into the prompt.
 // Callers that need to recognize that message in GetMessages output (e.g.
 // the runtime's context-window breakdown) match against this exact string
-// instead of duplicating the prefix.
+// instead of duplicating the prefix. The format is owned by [chat] so
+// [chat.Message.ReplayableCompaction] can verify it without this package.
 func SummaryMessageContent(summary string) string {
-	return summaryMessagePrefix + summary
+	return chat.SummaryMessageContent(summary)
 }
 
 // LastSummary returns the most recent compaction summary stored in the
@@ -2118,6 +2125,18 @@ func (s *Session) LastSummary() string {
 		}
 	}
 	return ""
+}
+
+// summaryMessage builds the synthetic user message that carries a summary
+// item into the prompt. A native compaction rides along so the producing
+// provider can replay its block; the text stays readable for all others.
+func (s *Session) summaryMessage(item Item) chat.Message {
+	return chat.Message{
+		Role:       chat.MessageRoleUser,
+		Content:    SummaryMessageContent(item.Summary),
+		CreatedAt:  s.now().Format(time.RFC3339),
+		Compaction: item.Compaction,
+	}
 }
 
 // buildSessionSummaryMessages builds system messages containing the session summary
@@ -2146,11 +2165,7 @@ func (s *Session) buildSessionSummaryMessages(items []Item) ([]chat.Message, int
 	summary := ""
 	if lastSummaryIndex >= 0 && lastSummaryIndex < len(items) {
 		summary = items[lastSummaryIndex].Summary
-		messages = append(messages, chat.Message{
-			Role:      chat.MessageRoleUser,
-			Content:   SummaryMessageContent(summary),
-			CreatedAt: s.now().Format(time.RFC3339),
-		})
+		messages = append(messages, s.summaryMessage(items[lastSummaryIndex]))
 	}
 
 	// Determine where conversation messages should start.
@@ -2219,11 +2234,11 @@ func (s *Session) CompactionInput() ([]chat.Message, []int, int) {
 	)
 
 	if lastSummaryIndex >= 0 {
-		messages = append(messages, chat.Message{
-			Role:      chat.MessageRoleUser,
-			Content:   SummaryMessageContent(items[lastSummaryIndex].Summary),
-			CreatedAt: s.now().Format(time.RFC3339),
-		})
+		summary := s.summaryMessage(items[lastSummaryIndex])
+		// The LLM strategy summarizes the readable text; a signed block
+		// replayed under the compaction prompt would be a foreign request.
+		summary.Compaction = nil
+		messages = append(messages, summary)
 		// The synthetic message stands in for the prior summary item;
 		// when this index lands inside the kept tail we want the
 		// summary item itself preserved so the next compaction round
@@ -2292,14 +2307,14 @@ func (s *Session) instructionMessages() ([]chat.Message, []InstructionUpdate) {
 }
 
 func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Message) []chat.Message {
-	messages, _ := s.getMessages(a, true, extraSystemMessages...)
+	messages, _, _ := s.getMessages(a, true, extraSystemMessages...)
 	return messages
 }
 
 // GetMessagesWithoutInstructionContext assembles the legacy prompt where
 // dynamic context is supplied directly as extra system messages.
 func (s *Session) GetMessagesWithoutInstructionContext(a *agent.Agent, extraSystemMessages ...chat.Message) []chat.Message {
-	messages, _ := s.getMessages(a, false, extraSystemMessages...)
+	messages, _, _ := s.getMessages(a, false, extraSystemMessages...)
 	return messages
 }
 
@@ -2312,10 +2327,21 @@ func (s *Session) GetMessagesWithoutInstructionContext(a *agent.Agent, extraSyst
 // guarantee covers only the session-history snapshot, not the other state
 // read during assembly (instruction context, agent configuration).
 func (s *Session) GetMessagesAndLastSummary(a *agent.Agent, extraSystemMessages ...chat.Message) ([]chat.Message, string) {
-	return s.getMessages(a, true, extraSystemMessages...)
+	messages, summary, _ := s.getMessages(a, true, extraSystemMessages...)
+	return messages, summary
 }
 
-func (s *Session) getMessages(a *agent.Agent, includeInstructionContext bool, extraSystemMessages ...chat.Message) ([]chat.Message, string) {
+// GetMessagesAndItemCount is GetMessages plus len(s.Messages) at the instant
+// the prompt's history snapshot was taken. A compaction that replaces the
+// whole prompt must record this count as FirstKeptEntry rather than a fresh
+// ItemCount(): the live count can already include an append that landed
+// after the snapshot, which the summary does not cover.
+func (s *Session) GetMessagesAndItemCount(a *agent.Agent) ([]chat.Message, int) {
+	messages, _, itemCount := s.getMessages(a, true)
+	return messages, itemCount
+}
+
+func (s *Session) getMessages(a *agent.Agent, includeInstructionContext bool, extraSystemMessages ...chat.Message) ([]chat.Message, string, int) {
 	slog.Debug("Getting messages for agent", "agent", a.Name(), "session_id", s.ID)
 
 	// Build invariant system messages (cacheable across sessions/users/projects)
@@ -2346,10 +2372,16 @@ func (s *Session) getMessages(a *agent.Agent, includeInstructionContext bool, ex
 	// Volatile extras (the daily date) live behind the same marker, which
 	// is acceptable: the cache simply rotates when the date rolls over,
 	// matching the behavior of the previous inline
-	// buildContextSpecificSystemMessages path.
+	// buildContextSpecificSystemMessages path. The copies are marked
+	// TurnScoped so a provider that can keep them out of the cached
+	// prefix does; the caller's messages are left untouched.
 	if len(extraSystemMessages) > 0 {
+		start := len(messages)
 		messages = append(messages, extraSystemMessages...)
-		markLastMessageAsCacheControl(messages[len(messages)-len(extraSystemMessages):])
+		for i := start; i < len(messages); i++ {
+			messages[i].TurnScoped = true
+		}
+		markLastMessageAsCacheControl(messages[start:])
 	}
 	messages = append(messages, summaryMessages...)
 
@@ -2415,7 +2447,7 @@ func (s *Session) getMessages(a *agent.Agent, includeInstructionContext bool, ex
 		"conversation_messages", conversationCount,
 		"max_history_items", maxItems)
 
-	return messages, summary
+	return messages, summary, len(items)
 }
 
 // trimMessages ensures we don't exceed the maximum number of messages while maintaining

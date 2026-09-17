@@ -257,17 +257,45 @@ func TestGetMessages_Instructions(t *testing.T) {
 func TestAddMessage_StripsCacheControl(t *testing.T) {
 	t.Parallel()
 
-	// CacheControl is request-assembly state; transcripts must never
-	// carry it (e.g. a mark echoed back by an API client), or it would
-	// resurface on every future prompt assembly.
+	// CacheControl and TurnScoped are request-assembly state; transcripts
+	// must never carry them (e.g. marks echoed back by an API client), or
+	// they would resurface on every future prompt assembly.
 	s := New()
 	s.AddMessage(&Message{Message: chat.Message{
 		Role:         chat.MessageRoleUser,
 		Content:      "hello",
 		CacheControl: true,
+		TurnScoped:   true,
 	}})
 
 	assert.False(t, s.Messages[0].Message.Message.CacheControl)
+	assert.False(t, s.Messages[0].Message.Message.TurnScoped)
+}
+
+func TestGetMessages_ExtrasAreTurnScoped(t *testing.T) {
+	t.Parallel()
+
+	testAgent := agent.New("root", "instructions")
+	s := New()
+	s.AddMessage(UserMessage("hi"))
+	extras := []chat.Message{
+		{Role: chat.MessageRoleSystem, Content: "env"},
+		{Role: chat.MessageRoleSystem, Content: "date"},
+	}
+
+	messages := s.GetMessages(testAgent, extras...)
+
+	var scoped []string
+	for _, msg := range messages {
+		if msg.TurnScoped {
+			scoped = append(scoped, msg.Content)
+		}
+	}
+	assert.Equal(t, []string{"env", "date"}, scoped, "only the extras are turn-scoped")
+	assert.False(t, messages[0].TurnScoped, "agent instructions stay stable")
+	for _, extra := range extras {
+		assert.False(t, extra.TurnScoped, "the caller's messages are not mutated")
+	}
 }
 
 func TestGetMessages_CacheControl(t *testing.T) {

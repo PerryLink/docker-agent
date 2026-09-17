@@ -147,3 +147,16 @@ type RerankingProvider interface {
 	// Rerank returns one relevance score per document, in input order.
 	Rerank(ctx context.Context, query string, documents []types.Document, criteria string) ([]float64, error)
 }
+
+// ConversationCompactor is a provider that can compact a conversation
+// server-side, returning a readable summary plus an opaque block it can
+// later replay in place of the compacted history.
+type ConversationCompactor interface {
+	Provider
+	// CompactConversation compacts messages, the fully assembled prompt the
+	// conversation model would receive (system messages included), with the
+	// same request tools. instructions is optional user steering for the
+	// summary. Returning a result with an empty Summary means nothing was
+	// compacted and the caller leaves the transcript untouched.
+	CompactConversation(ctx context.Context, messages []chat.Message, requestTools []tools.Tool, instructions string) (*chat.CompactionResult, error)
+}
