@@ -199,6 +199,25 @@ registry := teamloader.NewToolsetRegistry(creators)
 
 Pass the custom registry via `teamloader.WithToolsetRegistry(registry)` when calling `teamloader.Load`. Note that `teamloader.Load()` does not return an error for unknown toolset types unless `teamloader.WithStrict` is set — the failure is recorded as a load-time warning and can be retrieved with `agent.DrainWarnings()`; it is also surfaced via logging and TUI notifications.
 
+### RAG over in-memory documents
+
+Hosts without a filesystem (browsers, servers holding uploads in memory) can hand `pkg/rag` the documents directly. Set `ManagersBuildConfig.Documents`, a `rag.Documents` map keyed by logical path, and the manager indexes those instead of reading files: the RAG's `docs` select among the paths (exact path, directory prefix or glob), each strategy indexes the selection through its normal pipeline (`bm25`, `chunked-embeddings`, `semantic-embeddings`, fusion, reranking), `return_full_content` reads the supplied document, and change checks and the file watcher become no-ops. A `docs` entry selecting no document fails `NewManager`; a nil `Documents` keeps the filesystem behaviour.
+
+```go
+mgr, err := rag.NewManager(ctx, "handbook", ragCfg, rag.ManagersBuildConfig{
+    ParentDir:     "/",
+    Env:           runConfig.EnvProvider(),
+    RuntimeConfig: runConfig,
+    Documents:     rag.Documents{"handbook/leave.md": leave, "handbook/expenses.md": expenses},
+})
+if err != nil {
+    return err
+}
+ts := ragtool.New(mgr, mgr.ToolName(), ragtool.WithIndexingTimeout(ragCfg.GetIndexingTimeout()))
+```
+
+`cmd/wasm/toolsets.go` registers exactly this as the browser's `type: rag` creator, fed by `createSession`'s `documents` option.
+
 ## Loading YAML with Hand-Picked Registries (lean embedding)
 
 `loaderdefaults.Opts()` links every provider SDK, every built-in toolset and every agent-source type. When you embed docker-agent and load agents from YAML (a file shipped in your binary, or an OCI artifact), you can instead declare exactly what your binary supports and have docker-agent reject anything else **before** any model or toolset is built:
