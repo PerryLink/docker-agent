@@ -163,6 +163,15 @@ func (s *BM25Strategy) Initialize(ctx context.Context, docPaths []string, chunki
 		"chunk_overlap", chunking.Overlap,
 		"respect_word_boundaries", chunking.RespectWordBoundaries)
 
+	return s.initialize(ctx, s.files(docPaths), docPaths)
+}
+
+func (s *BM25Strategy) files(docPaths []string) fileSource {
+	return fileSource{paths: docPaths, shouldIgnore: s.shouldIgnore}
+}
+
+// docPaths is only used for logging; src decides what gets indexed.
+func (s *BM25Strategy) initialize(ctx context.Context, src documentSource, docPaths []string) error {
 	// Load existing file hashes
 	slog.DebugContext(ctx, "Loading existing file hashes", "strategy", s.name)
 	if err := s.loadExistingHashes(ctx); err != nil {
@@ -171,7 +180,7 @@ func (s *BM25Strategy) Initialize(ctx context.Context, docPaths []string, chunki
 
 	// Collect all files
 	slog.DebugContext(ctx, "Collecting files", "strategy", s.name, "paths", docPaths)
-	files, err := fsx.CollectFiles(ctx, docPaths, s.shouldIgnore)
+	files, err := src.list(ctx)
 	if err != nil {
 		s.emitEvent(types.Event{Type: types.EventTypeError, Error: err})
 		return fmt.Errorf("failed to collect files: %w", err)
@@ -217,7 +226,7 @@ func (s *BM25Strategy) Initialize(ctx context.Context, docPaths []string, chunki
 
 		seenFiles[filePath] = true
 
-		needsIndexing, err := s.needsIndexing(ctx, filePath)
+		needsIndexing, err := s.needsIndexing(src, filePath)
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to check if file needs indexing", "path", filePath, "error", err)
 			fileStatuses = append(fileStatuses, fileStatus{path: filePath, needsIndexing: false})
@@ -259,7 +268,7 @@ func (s *BM25Strategy) Initialize(ctx context.Context, docPaths []string, chunki
 			},
 		})
 
-		if err := s.indexFile(ctx, status.path); err != nil {
+		if err := s.indexFile(ctx, src, status.path); err != nil {
 			slog.ErrorContext(ctx, "Failed to index file", "path", status.path, "error", err)
 			continue
 		}
@@ -351,7 +360,8 @@ func (s *BM25Strategy) Query(ctx context.Context, query string, numResults int, 
 
 // CheckAndReindexChangedFiles checks for file changes and re-indexes if needed
 func (s *BM25Strategy) CheckAndReindexChangedFiles(ctx context.Context, docPaths []string, chunking ChunkingConfig) error {
-	files, err := fsx.CollectFiles(ctx, docPaths, s.shouldIgnore)
+	src := s.files(docPaths)
+	files, err := src.list(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to collect files: %w", err)
 	}
@@ -368,7 +378,7 @@ func (s *BM25Strategy) CheckAndReindexChangedFiles(ctx context.Context, docPaths
 
 		seenFiles[filePath] = true
 
-		needsIndexing, err := s.needsIndexing(ctx, filePath)
+		needsIndexing, err := s.needsIndexing(src, filePath)
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to check if file needs indexing", "path", filePath, "error", err)
 			continue
@@ -376,7 +386,7 @@ func (s *BM25Strategy) CheckAndReindexChangedFiles(ctx context.Context, docPaths
 
 		if needsIndexing {
 			slog.InfoContext(ctx, "File changed, re-indexing", "path", filePath)
-			if err := s.indexFile(ctx, filePath); err != nil {
+			if err := s.indexFile(ctx, src, filePath); err != nil {
 				slog.ErrorContext(ctx, "Failed to re-index file", "path", filePath, "error", err)
 			}
 		}
@@ -548,8 +558,8 @@ func (s *BM25Strategy) loadExistingHashes(ctx context.Context) error {
 	return nil
 }
 
-func (s *BM25Strategy) needsIndexing(_ context.Context, filePath string) (bool, error) {
-	currentHash, err := chunk.FileHash(filePath)
+func (s *BM25Strategy) needsIndexing(src documentSource, filePath string) (bool, error) {
+	currentHash, err := src.hash(filePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to hash file: %w", err)
 	}
@@ -565,8 +575,8 @@ func (s *BM25Strategy) needsIndexing(_ context.Context, filePath string) (bool, 
 	return storedHash != currentHash, nil
 }
 
-func (s *BM25Strategy) indexFile(ctx context.Context, filePath string) error {
-	fileHash, err := chunk.FileHash(filePath)
+func (s *BM25Strategy) indexFile(ctx context.Context, src documentSource, filePath string) error {
+	fileHash, err := src.hash(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to hash file: %w", err)
 	}
@@ -575,7 +585,11 @@ func (s *BM25Strategy) indexFile(ctx context.Context, filePath string) error {
 		return fmt.Errorf("failed to delete old documents: %w", err)
 	}
 
-	chunks, err := chunk.ProcessFile(ctx, s.docProcessor, filePath)
+	content, err := src.read(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to process file: %w", err)
+	}
+	chunks, err := s.docProcessor.Process(ctx, filePath, content)
 	if err != nil {
 		return fmt.Errorf("failed to process file: %w", err)
 	}
@@ -706,6 +720,8 @@ func (s *BM25Strategy) watchLoop(ctx context.Context, docPaths []string) {
 		return
 	}
 
+	src := s.files(docPaths)
+
 	var debounceTimer *time.Timer
 	debounceDuration := 2 * time.Second
 	pendingChanges := make(map[string]bool)
@@ -747,13 +763,13 @@ func (s *BM25Strategy) watchLoop(ctx context.Context, docPaths []string) {
 				continue
 			}
 
-			needsIndexing, err := s.needsIndexing(ctx, file)
+			needsIndexing, err := s.needsIndexing(src, file)
 			if err != nil || !needsIndexing {
 				continue
 			}
 
 			slog.DebugContext(ctx, "Indexing file", "path", file, "strategy", s.name)
-			if err := s.indexFile(ctx, file); err != nil {
+			if err := s.indexFile(ctx, src, file); err != nil {
 				slog.ErrorContext(ctx, "Failed to re-index file", "path", file, "error", err)
 			}
 		}
