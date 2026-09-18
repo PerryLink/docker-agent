@@ -180,6 +180,47 @@ models:
 | `google_maps`    | Enables Google Maps grounding for location queries   |
 | `code_execution` | Enables server-side code execution for computations  |
 
+## Embeddings
+
+Gemini embedding models can back the [RAG](../../tools/rag/index.md)
+`chunked-embeddings` and `semantic-embeddings` strategies. Text is embedded
+natively through the Gemini API (`batchEmbedContents`) or Vertex AI, and vectors
+come back in input order. On Vertex AI, Gemini Embedding 2 models accept one
+input per request, so batches are sent one text at a time there.
+
+```yaml
+models:
+  gemini-embed:
+    provider: google
+    model: gemini-embedding-2
+    provider_opts:
+      output_dimensionality: 768   # optional; defaults to the model's native size
+
+rag:
+  docs:
+    docs: [./docs]
+    strategies:
+      - type: chunked-embeddings
+        embedding_model: gemini-embed
+        database: ./docs.db
+        vector_dimensions: 768       # must match output_dimensionality (or the native size)
+```
+
+| Option                  | Description                                                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `output_dimensionality` | Positive integer. Truncates vectors to this size on models that support it (Matryoshka). Omit to use the native size. |
+
+`gemini-embedding-001` works the same way. Vectors from different models (or
+different `output_dimensionality` values) live in different vector spaces, so
+rebuild the index after changing either.
+
+Only text is embedded, and no `task_type` is sent: queries and documents share
+one vector space with no automatic task prefixes, and the same configuration
+works with Gemini Embedding 2, which rejects `task_type`. The Gemini Developer
+API does not report token usage for embeddings, so RAG cost statistics stay at
+zero; Vertex AI per-input token statistics are summed into the input token
+count when present.
+
 ## Vertex AI Model Garden
 
 You can use non-Gemini models (e.g. Claude, Llama) hosted on Google Cloud's
