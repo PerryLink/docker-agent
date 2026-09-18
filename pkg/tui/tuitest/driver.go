@@ -24,6 +24,7 @@
 package tuitest
 
 import (
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -139,6 +140,7 @@ func New(tb testing.TB, model tea.Model, width, height int, opts ...Option) *Dri
 	// surface to the test runner.
 	p := tea.NewProgram(capture,
 		tea.WithoutRenderer(),
+		tea.WithOutput(io.Discard),
 		tea.WithoutSignals(),
 		tea.WithoutCatchPanics(),
 		tea.WithInput(nil),

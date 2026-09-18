@@ -108,6 +108,11 @@ $ docker agent run --agent-picker=myorg/coder,myorg/researcher
 > Pass `--lean` to get a lightweight TUI that renders inline in your terminal (no alternate screen). Like the full TUI, it displays an ASCII art banner on startup when the chat is empty (configurable via `show_banner` in [user settings](../../configuration/user-settings/index.md)), and supports the same slash commands and streaming output, making it handy inside tmux, scripts, or any context where a full-screen takeover is unwanted.
 
 > [!TIP]
+> **Background animations in tmux**
+>
+> Add `set -g focus-events on` to your tmux configuration to pause TUI animations in unfocused panes and detached sessions. Agent execution and streamed responses continue; animations resume when the pane regains focus. The Kanban board enables this on its private tmux server automatically.
+
+> [!TIP]
 > **Isolate a run in a git worktree**
 >
 > When the working directory is inside a git repository, `--worktree` creates a fresh [git worktree](https://git-scm.com/docs/git-worktree) and points the session at it, so the agent's edits land on a separate branch and never touch your checkout. Every tool — the shell included — runs inside the worktree. The worktree is stored under `<data-dir>/worktrees/<name>` on a branch named `worktree-<name>`.
