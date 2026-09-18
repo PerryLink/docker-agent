@@ -160,8 +160,8 @@ models:
 
 ## Built-in Tools (Grounding)
 
-Gemini models support built-in tools that let the model access Google Search and Google Maps
-directly during generation. Enable them via `provider_opts`:
+Gemini models support built-in tools that let the model access Google Search, Google Maps,
+and public URLs, or execute code directly during generation. Enable them via `provider_opts`:
 
 ```yaml
 models:
@@ -179,6 +179,41 @@ models:
 | `google_search`  | Enables Google Search grounding for up-to-date info  |
 | `google_maps`    | Enables Google Maps grounding for location queries   |
 | `code_execution` | Enables server-side code execution for computations  |
+| `url_context`    | Lets Gemini read public URLs supplied in the prompt   |
+
+### URL Context
+
+Enable `url_context` to let Gemini read links supplied in your prompt without a
+separate fetch tool:
+
+```yaml
+models:
+  reader:
+    provider: google
+    model: gemini-3.8-flash
+    provider_opts:
+      url_context: true
+      google_search: true # Optional: discover sources as well as read links
+```
+
+Then ask, for example, `Summarize https://docs.docker.com/ai/docker-agent/`.
+Google fetches the content on its servers; it cannot read local files, private
+network URLs, or pages requiring your browser's authentication. The option is
+opt-in and accepts a YAML boolean, not the string `"true"`.
+
+Docker Agent forwards this tool on the Gemini Developer API, models gateway,
+and native Gemini Vertex AI paths. Model, backend, region, and tool-combination
+support still depend on Google and the gateway. On supported models it can be
+combined with Google Search. Mixing built-in and custom function tools currently
+uses a flag that the Go SDK accepts only on the Gemini Developer API path
+(including gateways forwarding to that API), not Vertex AI. This is not a
+general browser or an alternative to the local fetch tool for authenticated
+requests.
+
+See Google's [URL Context guide](https://ai.google.dev/gemini-api/docs/url-context)
+for supported content types, limits, and models, and
+[`examples/gemini_url_context.yaml`](https://github.com/docker/docker-agent/blob/main/examples/gemini_url_context.yaml)
+for a complete agent.
 
 ## Embeddings
 

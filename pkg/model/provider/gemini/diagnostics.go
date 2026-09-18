@@ -25,7 +25,7 @@ type RequestShape struct {
 	ResponseModalities    []string
 
 	// BuiltInToolKinds lists which fixed-kind built-in tools (google_search,
-	// google_maps, code_execution) were enabled. BuiltInToolCount is
+	// google_maps, code_execution, url_context) were enabled. BuiltInToolCount is
 	// len(BuiltInToolKinds).
 	BuiltInToolKinds []string
 	BuiltInToolCount int
@@ -124,6 +124,8 @@ func builtInToolKinds(toolsList []*genai.Tool) []string {
 			kinds = append(kinds, "google_maps")
 		case t.CodeExecution != nil:
 			kinds = append(kinds, "code_execution")
+		case t.URLContext != nil:
+			kinds = append(kinds, "url_context")
 		}
 	}
 	return kinds

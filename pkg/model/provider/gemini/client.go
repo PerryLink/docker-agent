@@ -567,8 +567,7 @@ func (c *Client) applyGemini25ThinkingBudget(config *genai.GenerateContentConfig
 	slog.Debug("Gemini request using thinking_budget", "budget_tokens", tokens)
 }
 
-// builtInTools returns Gemini built-in tools (Google Search, Google Maps,
-// Code Execution) enabled via provider_opts.
+// builtInTools returns Gemini built-in tools enabled via provider_opts.
 func (c *Client) builtInTools() []*genai.Tool {
 	entries := []struct {
 		key  string
@@ -577,6 +576,7 @@ func (c *Client) builtInTools() []*genai.Tool {
 		{"google_search", &genai.Tool{GoogleSearch: &genai.GoogleSearch{}}},
 		{"google_maps", &genai.Tool{GoogleMaps: &genai.GoogleMaps{}}},
 		{"code_execution", &genai.Tool{CodeExecution: &genai.ToolCodeExecution{}}},
+		{"url_context", &genai.Tool{URLContext: &genai.URLContext{}}},
 	}
 
 	var builtIn []*genai.Tool
@@ -799,7 +799,7 @@ func (c *Client) CreateChatCompletionStream(
 		applyImageOutputMediaFileInstruction(config)
 	}
 
-	// Start with Google built-in tools (search, maps, code execution) from provider_opts
+	// Start with Google built-in tools from provider_opts
 	builtInTools := c.builtInTools()
 	config.Tools = builtInTools
 
