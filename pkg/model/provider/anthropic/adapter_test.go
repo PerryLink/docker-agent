@@ -10,15 +10,15 @@ import (
 	"github.com/docker/docker-agent/pkg/chat"
 )
 
-// TestUsageFromDelta_RecordsReasoningTokens pins the fix for the invisible
+// TestUsageFromMessage_RecordsReasoningTokens pins the fix for the invisible
 // Anthropic thinking-cost bug: extended-thinking tokens are billed inside
 // OutputTokens but were never surfaced as ReasoningTokens, so the cost dialog
 // and usage dashboards showed zero reasoning for Claude while every other
 // provider (OpenAI, Gemini) reported it. The SDK exposes the breakdown via
 // OutputTokensDetails.ThinkingTokens; this asserts we map it through.
-func TestUsageFromDelta_RecordsReasoningTokens(t *testing.T) {
+func TestUsageFromMessage_RecordsReasoningTokens(t *testing.T) {
 	t.Parallel()
-	u := anthropic.MessageDeltaUsage{
+	u := anthropic.Usage{
 		InputTokens:              100,
 		OutputTokens:             80,
 		CacheReadInputTokens:     20,
@@ -26,7 +26,7 @@ func TestUsageFromDelta_RecordsReasoningTokens(t *testing.T) {
 		OutputTokensDetails:      anthropic.OutputTokensDetails{ThinkingTokens: 55},
 	}
 
-	got := usageFromDelta(u)
+	got := usageFromMessage(u)
 
 	require.NotNil(t, got)
 	assert.Equal(t, int64(100), got.InputTokens)
@@ -37,12 +37,12 @@ func TestUsageFromDelta_RecordsReasoningTokens(t *testing.T) {
 		"thinking tokens must be surfaced as ReasoningTokens, not dropped")
 }
 
-// TestBetaUsageFromDelta_RecordsReasoningTokens is the Beta-API twin of the
+// TestBetaUsageFromMessage_RecordsReasoningTokens is the Beta-API twin of the
 // above. Interleaved thinking (the common case for extended-thinking agents)
 // routes through the Beta stream, so the breakdown must be mapped there too.
-func TestBetaUsageFromDelta_RecordsReasoningTokens(t *testing.T) {
+func TestBetaUsageFromMessage_RecordsReasoningTokens(t *testing.T) {
 	t.Parallel()
-	u := anthropic.BetaMessageDeltaUsage{
+	u := anthropic.BetaUsage{
 		InputTokens:              200,
 		OutputTokens:             150,
 		CacheReadInputTokens:     40,
@@ -50,7 +50,7 @@ func TestBetaUsageFromDelta_RecordsReasoningTokens(t *testing.T) {
 		OutputTokensDetails:      anthropic.BetaOutputTokensDetails{ThinkingTokens: 90},
 	}
 
-	got := betaUsageFromDelta(u)
+	got := betaUsageFromMessage(u)
 
 	require.NotNil(t, got)
 	assert.Equal(t, int64(200), got.InputTokens)

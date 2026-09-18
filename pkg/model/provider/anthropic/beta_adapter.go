@@ -111,7 +111,7 @@ func (a *betaStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 	case anthropic.BetaRawMessageDeltaEvent:
 		a.stopReason = eventVariant.Delta.StopReason
 		if a.trackUsage {
-			response.Usage = betaUsageFromDelta(eventVariant.Usage)
+			response.Usage = betaUsageFromMessage(a.message.Usage)
 		}
 	case anthropic.BetaRawMessageStopEvent:
 		for _, dropped := range thinkingTransformations(a.message.InputTransformations) {
@@ -136,7 +136,8 @@ func (a *betaStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 }
 
 func (a *betaStreamAdapter) accumulate(event anthropic.BetaRawMessageStreamEventUnion) {
-	if a.rawLost {
+	// Usage must keep accumulating even if raw content capture failed.
+	if a.rawLost && event.Type != "message_start" && event.Type != "message_delta" {
 		return
 	}
 	if err := a.message.Accumulate(event); err != nil {
@@ -150,11 +151,8 @@ func (a *betaStreamAdapter) Close() {
 	a.stream.Close()
 }
 
-// betaUsageFromDelta maps the Beta Messages API streaming usage onto chat.Usage.
-// As with the standard API, ReasoningTokens is sourced from
-// OutputTokensDetails.ThinkingTokens — a read-only decomposition of the already
-// billed OutputTokens — so recording it is purely additive observability.
-func betaUsageFromDelta(u anthropic.BetaMessageDeltaUsage) *chat.Usage {
+// betaUsageFromMessage maps accumulated usage; reasoning is already included in output.
+func betaUsageFromMessage(u anthropic.BetaUsage) *chat.Usage {
 	return &chat.Usage{
 		InputTokens:       u.InputTokens,
 		OutputTokens:      u.OutputTokens,
