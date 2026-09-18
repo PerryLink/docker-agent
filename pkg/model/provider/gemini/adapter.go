@@ -212,12 +212,13 @@ func (g *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 	if res.resp != nil {
 		resp.ID = res.resp.ResponseID
 
-		if res.resp.UsageMetadata != nil && g.trackUsage {
+		if usage := res.resp.UsageMetadata; usage != nil && g.trackUsage {
+			// Server-side tool results are additional, uncached input tokens.
 			resp.Usage = &chat.Usage{
-				InputTokens:       int64(res.resp.UsageMetadata.PromptTokenCount - res.resp.UsageMetadata.CachedContentTokenCount),
-				OutputTokens:      int64(res.resp.UsageMetadata.CandidatesTokenCount + res.resp.UsageMetadata.ThoughtsTokenCount),
-				CachedInputTokens: int64(res.resp.UsageMetadata.CachedContentTokenCount),
-				ReasoningTokens:   int64(res.resp.UsageMetadata.ThoughtsTokenCount),
+				InputTokens:       int64(usage.PromptTokenCount-usage.CachedContentTokenCount) + int64(usage.ToolUsePromptTokenCount),
+				OutputTokens:      int64(usage.CandidatesTokenCount + usage.ThoughtsTokenCount),
+				CachedInputTokens: int64(usage.CachedContentTokenCount),
+				ReasoningTokens:   int64(usage.ThoughtsTokenCount),
 			}
 		}
 	}

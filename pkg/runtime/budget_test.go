@@ -79,6 +79,60 @@ func TestBudgetMaxTokens(t *testing.T) {
 	assert.Equal(t, "1000 tokens", breach.Max)
 }
 
+func TestBudgetTokensIncludeCache(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		usage  chat.Usage
+		tokens int64
+	}{
+		{
+			name:   "fresh input and output",
+			usage:  chat.Usage{InputTokens: 100, OutputTokens: 50},
+			tokens: 150,
+		},
+		{
+			name:   "cache read only",
+			usage:  chat.Usage{CachedInputTokens: 1000},
+			tokens: 1000,
+		},
+		{
+			name:   "cache write only",
+			usage:  chat.Usage{CacheWriteTokens: 1000},
+			tokens: 1000,
+		},
+		{
+			name:   "mixed input buckets",
+			usage:  chat.Usage{InputTokens: 100, OutputTokens: 50, CachedInputTokens: 10000, CacheWriteTokens: 2000},
+			tokens: 12150,
+		},
+		{
+			name:   "reasoning already included in output",
+			usage:  chat.Usage{InputTokens: 100, OutputTokens: 50, CachedInputTokens: 10000, CacheWriteTokens: 2000, ReasoningTokens: 40},
+			tokens: 12150,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := newBudgetTracker(&latest.BudgetConfig{MaxTokens: tt.tokens})
+			b.record("root", &tt.usage, nil, time.Second)
+
+			snapshot := b.snapshot()
+			assert.Equal(t, tt.tokens, snapshot.Tokens)
+			require.Len(t, snapshot.PerAgent, 1)
+			assert.Equal(t, "root", snapshot.PerAgent[0].AgentName)
+			assert.Equal(t, tt.tokens, snapshot.PerAgent[0].Tokens)
+
+			breach := b.exceeded()
+			require.NotNil(t, breach, "reaching the token limit must trip the budget")
+			assert.Equal(t, budgetLimitTokens, breach.Limit)
+		})
+	}
+}
+
 func TestBudgetTokensAreMonotonicAndCountBothDirections(t *testing.T) {
 	b := newBudgetTracker(&latest.BudgetConfig{MaxTokens: 100})
 	for range 10 {

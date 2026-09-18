@@ -3,7 +3,6 @@ package teamloader
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"maps"
 	"net/http"
@@ -26,7 +25,6 @@ import (
 	"github.com/docker/docker-agent/pkg/config/sources"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/js"
-	"github.com/docker/docker-agent/pkg/model/provider/dmr"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	providerdefaults "github.com/docker/docker-agent/pkg/model/provider/providers"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -112,6 +110,15 @@ func TestLoadExamples(t *testing.T) {
 		t.Setenv(env, "dummy")
 	}
 
+	// Load real DMR clients without local discovery or model downloads.
+	dmrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/engines/_configure", r.URL.Path)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(dmrServer.Close)
+	t.Setenv("MODEL_RUNNER_HOST", dmrServer.URL)
+
 	for _, agentFilename := range examples {
 		t.Run(agentFilename, func(t *testing.T) {
 			t.Parallel()
@@ -137,9 +144,6 @@ func TestLoadExamples(t *testing.T) {
 			runConfig.WorkingDir = t.TempDir()
 
 			teams, err := Load(catalogContext(t), agentSource, runConfig, withTestProviderRegistry()...)
-			if errors.Is(err, dmr.ErrNotInstalled) {
-				t.Skipf("Skipping %s: Docker Model Runner not installed", agentFilename)
-			}
 			require.NoError(t, err)
 			assert.NotEmpty(t, teams)
 		})

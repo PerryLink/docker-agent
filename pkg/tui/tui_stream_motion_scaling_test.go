@@ -53,10 +53,11 @@ func (m *streamingMotionModel) View() tea.View {
 	defer m.mu.Unlock()
 
 	m.views.Add(1)
-	if !m.root.viewCacheValid {
+	wasCached := m.root.viewCacheValid
+	v := m.root.View()
+	if !wasCached && m.root.viewCacheValid {
 		m.compositions.Add(1)
 	}
-	v := m.root.View()
 	m.once.Do(func() { close(m.ready) })
 	return v
 }

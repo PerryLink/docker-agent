@@ -325,3 +325,31 @@ func lmcBenchTree(ownMsgs, subSessions, subMsgs int) *Session {
 	s.Messages = append(s.Messages, NewMessageItem(mk(chat.MessageRoleUser, -1)))
 	return s
 }
+
+func TestGetLastMessageContent_UsageOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		msg  chat.Message
+		want string
+	}{
+		{name: "empty", msg: chat.Message{Role: chat.MessageRoleAssistant, Usage: &chat.Usage{}}, want: "earlier"},
+		{name: "reasoning", msg: chat.Message{Role: chat.MessageRoleAssistant, Content: " \n", ReasoningContent: "thinking", Usage: &chat.Usage{}}, want: "earlier"},
+		{name: "tool call", msg: chat.Message{Role: chat.MessageRoleAssistant, Usage: &chat.Usage{}, ToolCalls: []tools.ToolCall{{ID: "call"}}}},
+		{name: "function call", msg: chat.Message{Role: chat.MessageRoleAssistant, Usage: &chat.Usage{}, FunctionCall: &tools.FunctionCall{Name: "tool"}}},
+		{name: "media", msg: chat.Message{Role: chat.MessageRoleAssistant, Usage: &chat.Usage{}, MultiContent: []chat.MessagePart{{Type: chat.MessagePartTypeDocument}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := New(WithMessages([]Item{
+				NewMessageItem(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "earlier"}}),
+				NewMessageItem(&Message{Message: tt.msg}),
+			}))
+			assert.Equal(t, tt.want, s.GetLastAssistantMessageContent())
+			parent := New(WithMessages([]Item{NewSubSessionItem(s)}))
+			assert.Equal(t, tt.want, parent.GetLastAssistantMessageContent())
+		})
+	}
+}

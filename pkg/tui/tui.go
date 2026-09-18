@@ -169,9 +169,11 @@ type appModel struct {
 
 	// Exact root view cache. Unchanged accepted ticks return this complete value,
 	// preserving metadata and function fields as well as content.
-	viewCache      tea.View
-	viewCacheValid bool
-	hasPointer     bool
+	viewCache            tea.View
+	viewCacheValid       bool
+	viewCacheInitialized bool
+	renderDeferred       bool // Defer composition after blur, but keep processing events.
+	hasPointer           bool
 
 	// Window state
 	wWidth, wHeight int
@@ -205,10 +207,7 @@ type appModel struct {
 	// change via watchCurrentTheme.
 	themeWatcher themeFileWatcher
 
-	// dockerDesktop is true when running inside Docker Desktop's terminal
-	// (TERM_PROGRAM=docker_desktop). Focus reporting and the terminal
-	// release/restore cycle on tab switch are only enabled in this
-	// environment.
+	// dockerDesktop enables terminal mode restoration after a focus change.
 	dockerDesktop bool
 
 	// focused tracks whether the terminal currently has focus. Used to
@@ -219,12 +218,10 @@ type appModel struct {
 	// cycle which re-emits terminal mode escape sequences.
 	focused bool
 
-	// tickPaused is true while we should drop animation.TickMsg events
-	// (and let the tick chain die). Set on BlurMsg and cleared on the
-	// next real FocusMsg. Tracked separately from `focused` so that ticks
-	// keep flowing at startup even before any focus event arrives — some
-	// terminals never send FocusMsg.
-	tickPaused bool
+	// Real focus events take precedence over the asynchronous startup probe.
+	focusEventReceived bool
+	tmuxFocusPending   bool
+	tmuxFocusProbe     func() tea.Msg
 
 	// lightDarkModeSet is true while DEC mode 2031 (terminal color-scheme
 	// reports) is enabled. Set when the auto theme turns the mode on, so the
@@ -727,7 +724,7 @@ func (m *appModel) contextShutdownCmd() tea.Cmd {
 
 // Init initializes the model.
 func (m *appModel) Init() tea.Cmd {
-	return tea.Batch(m.init(), m.tourStartupCmd(), m.autoThemeInitCmd(), m.refreshPlanSidebarCmd())
+	return tea.Batch(m.init(), m.tourStartupCmd(), m.autoThemeInitCmd(), m.refreshPlanSidebarCmd(), m.initialFocusCmd())
 }
 
 // autoThemeInitCmd enables DEC mode 2031 (terminal color-scheme reports) so
@@ -746,6 +743,8 @@ func (m *appModel) autoThemeInitCmd() tea.Cmd {
 // theme enabled it, so the terminal stops sending color-scheme reports
 // after exit.
 func (m *appModel) quitCmd() tea.Cmd {
+	// Bubble Tea leaves the final frame in scrollback in lean mode.
+	m.renderDeferred = false
 	if !m.lightDarkModeSet {
 		return tea.Quit
 	}
@@ -898,12 +897,6 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		msg = accepted
-		// Drop the tick (and let the chain die) while we're blurred.
-		// animation.StartTick re-arms the chain on the next FocusMsg so
-		// spinners resume immediately when the user comes back.
-		if m.tickPaused {
-			return m, nil
-		}
 		cmds := []tea.Cmd{m.updateChatCmd(msg)}
 		// Update working spinner
 		if m.activeTab.chatPage.IsWorking() {
@@ -1011,15 +1004,34 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.imageWriter.Invalidate()
 		}
 		m.wWidth, m.wHeight = msg.Width, msg.Height
+		// Reusing the old geometry can push stale lean-mode lines into scrollback.
+		m.viewCacheInitialized = false
 		cmd := m.handleWindowResize(msg.Width, msg.Height)
 		return m, cmd
 
+	case tea.CursorPositionMsg:
+		if m.tmuxFocusPending {
+			m.tmuxFocusPending = false
+			return m, m.tmuxFocusProbe
+		}
+		return m, nil
+
+	case initialFocusMsg:
+		if !m.focusEventReceived && msg.hidden {
+			m.ar.Pause()
+		}
+		return m, nil
+
 	case tea.BlurMsg:
+		m.focusEventReceived = true
+		m.renderDeferred = true
 		m.focused = false
-		m.tickPaused = true
+		m.ar.Pause()
 		return m, nil
 
 	case tea.FocusMsg:
+		m.focusEventReceived = true
+		m.renderDeferred = false
 		// Filter spurious FocusMsg: RestoreTerminal re-enables focus
 		// reporting which delivers a FocusMsg even when we never blurred.
 		if m.focused {
@@ -1027,12 +1039,7 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.focused = true
 
-		var cmds []tea.Cmd
-		if m.tickPaused {
-			// Re-arm the tick chain that died while we were blurred.
-			m.tickPaused = false
-			cmds = append(cmds, m.ar.EnsureRunning())
-		}
+		cmds := []tea.Cmd{m.ar.Resume()}
 		if styles.AutoThemeEnabled() {
 			// Terminals without mode 2031 can still flip their appearance
 			// while we're in the background; re-query on focus so the auto
@@ -2940,9 +2947,20 @@ func (m *appModel) View() tea.View {
 	if m.viewCacheValid {
 		return m.viewCache
 	}
+	if m.renderDeferred && m.viewCacheInitialized && m.err == nil {
+		// Keep completion signals live without composing the hidden transcript.
+		view := m.viewCache
+		view.WindowTitle = m.windowTitle()
+		view.ProgressBar = nil
+		if m.activeTab.chatPage.IsWorking() {
+			view.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
+		}
+		return view
+	}
 	view := m.composeView()
 	m.viewCache = view
 	m.viewCacheValid = true
+	m.viewCacheInitialized = true
 	return view
 }
 
@@ -3260,6 +3278,7 @@ func toFullscreenView(content, windowTitle string, working, leanMode bool) tea.V
 	view.MouseMode = tea.MouseModeAllMotion
 	view.BackgroundColor = styles.Background
 	view.WindowTitle = windowTitle
+	view.ReportFocus = true
 	if working {
 		view.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
 	}

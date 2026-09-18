@@ -1321,13 +1321,17 @@ func (s *Session) getLastMessageContentByRole(role chat.MessageRole) string {
 // lastMessageContentByRole walks items newest-first under RLock, mirroring
 // GetAllMessages' selection: a non-system message item contributes its own
 // message; a sub-session item is recursed into. The bool distinguishes a
-// blank match (stops the search) from no match.
+// blank match (stops the search) from no match. Usage-only assistant records
+// must not mask the output returned to a delegating agent.
 func (s *Session) lastMessageContentByRole(role chat.MessageRole) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, item := range slices.Backward(s.Messages) {
 		switch {
 		case item.IsMessage() && item.Message.Message.Role != chat.MessageRoleSystem:
+			if isUsageOnlyMessage(&item.Message.Message) {
+				continue
+			}
 			if item.Message.Message.Role == role {
 				return strings.TrimSpace(item.Message.Message.Content), true
 			}
@@ -1338,6 +1342,13 @@ func (s *Session) lastMessageContentByRole(role chat.MessageRole) (string, bool)
 		}
 	}
 	return "", false
+}
+
+// isUsageOnlyMessage identifies empty assistant turns retained only for accounting.
+func isUsageOnlyMessage(msg *chat.Message) bool {
+	return msg.Role == chat.MessageRoleAssistant && msg.Usage != nil &&
+		strings.TrimSpace(msg.Content) == "" && len(msg.MultiContent) == 0 &&
+		len(msg.ToolCalls) == 0 && msg.FunctionCall == nil
 }
 
 // AddMessageUsageRecord appends a usage record for remote mode where messages aren't stored locally.
@@ -2399,7 +2410,7 @@ func (s *Session) getMessages(a *agent.Agent, includeInstructionContext bool, ex
 			})
 			updateIndex++
 		}
-		if i < len(items) && items[i].IsMessage() {
+		if i < len(items) && items[i].IsMessage() && !isUsageOnlyMessage(&items[i].Message.Message) {
 			messages = append(messages, items[i].Message.Message)
 		}
 	}

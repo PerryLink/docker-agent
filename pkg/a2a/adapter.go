@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -127,8 +128,14 @@ func runDockerAgent(ctx agent.InvocationContext, t *team.Team, agentName string,
 			return
 		}
 
-		// Run the agent and collect events
-		eventsChan := rt.RunStream(ctx, sess)
+		// Early iterator exits must cancel and join the runtime.
+		streamCtx, cancel := context.WithCancel(ctx)
+		eventsChan := rt.RunStream(streamCtx, sess)
+		defer func() {
+			cancel()
+			for range eventsChan {
+			}
+		}()
 
 		// Track accumulated content for chunked responses
 		var contentBuilder strings.Builder
@@ -152,7 +159,7 @@ func runDockerAgent(ctx agent.InvocationContext, t *team.Team, agentName string,
 
 		for event := range eventsChan {
 			if ctx.Ended() {
-				slog.Debug("Invocation ended, stopping agent", "agent", agentName)
+				slog.DebugContext(ctx, "Invocation ended, stopping agent", "agent", agentName)
 				return
 			}
 

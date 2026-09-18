@@ -61,7 +61,7 @@ func (b *budgetTracker) record(agentName string, usage *chat.Usage, cost *float6
 
 	var addTokens int64
 	if usage != nil {
-		addTokens = usage.InputTokens + usage.OutputTokens
+		addTokens = usage.PromptTokens() + usage.OutputTokens
 		b.tokens += addTokens
 	}
 	var addCost float64

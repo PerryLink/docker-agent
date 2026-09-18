@@ -937,10 +937,7 @@ func (r *LocalRuntime) runTurn(
 	case emptyTurn && len(res.Media) > 0:
 		slog.DebugContext(ctx, "Media-only assistant turn", "agent", a.Name(), "model", modelID.String(), "media_items", len(res.Media), "session_id", sess.ID)
 	case emptyTurn:
-		// Surface otherwise-silent empty turns. recordAssistantMessage skips a
-		// turn with no content and no tool calls, which previously left the user
-		// staring at silence with no explanation. See emptyTurnWarning for the
-		// classification of the known causes.
+		// Retained usage records carry no visible reply; explain the empty turn.
 		reason := res.FinishReason
 		if reason == "" {
 			reason = chat.FinishReasonNull
@@ -1155,7 +1152,14 @@ func (r *LocalRuntime) runTurn(
 // messages. This is a convenience wrapper around RunStream for non-streaming
 // callers.
 func (r *LocalRuntime) Run(ctx context.Context, sess *session.Session) ([]session.Message, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	events := r.RunStream(ctx, sess)
+	// Cancel before draining so error returns cannot strand the producer.
+	defer func() {
+		cancel()
+		for range events {
+		}
+	}()
 	for event := range events {
 		if errEvent, ok := event.(*ErrorEvent); ok {
 			return nil, fmt.Errorf("%s", errEvent.Error)
@@ -1225,8 +1229,8 @@ func shouldWarnOnCacheMiss(sess *session.Session, usage *MessageUsage) bool {
 }
 
 // recordAssistantMessage adds the model's response to the session and returns
-// per-message usage information for the token-usage event. Empty responses
-// (no text and no tool calls) are silently skipped since providers reject them.
+// per-message usage information for the token-usage event. Empty responses with
+// usage are kept for accounting; session prompt assembly filters them out.
 // cost is the precomputed per-turn cost (see computeMessageCost); nil records
 // as 0, matching the previous "no pricing data" behaviour.
 func (r *LocalRuntime) recordAssistantMessage(
@@ -1240,8 +1244,11 @@ func (r *LocalRuntime) recordAssistantMessage(
 	events EventSink,
 ) *MessageUsage {
 	if strings.TrimSpace(res.Content) == "" && len(res.Calls) == 0 && len(res.Media) == 0 {
-		slog.DebugContext(ctx, "Skipping empty assistant message (no content, no tool calls, and no generated media)", "agent", a.Name())
-		return nil
+		if res.Usage == nil {
+			slog.DebugContext(ctx, "Skipping empty assistant message without usage", "agent", a.Name())
+			return nil
+		}
+		res.Content = ""
 	}
 
 	// Sanitize tool call names before persisting. A model may hallucinate

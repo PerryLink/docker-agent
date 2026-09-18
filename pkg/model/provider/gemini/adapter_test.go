@@ -139,6 +139,74 @@ func TestStreamAdapter_GeminiUsageMetadata(t *testing.T) {
 	})
 }
 
+func TestStreamAdapter_ToolUsePromptTokens(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		cached     int32
+		toolUse    int32
+		trackUsage bool
+		wantInput  int64
+	}{
+		{name: "without tool use", trackUsage: true, wantInput: 100},
+		{name: "tool use", toolUse: 50, trackUsage: true, wantInput: 150},
+		{name: "tool use with cached prompt", cached: 40, toolUse: 50, trackUsage: true, wantInput: 110},
+		{name: "tool use with fully cached prompt", cached: 100, toolUse: 50, trackUsage: true, wantInput: 50},
+		{name: "tracking disabled", cached: 40, toolUse: 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			metadata := &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount:        100,
+				CachedContentTokenCount: tc.cached,
+				ToolUsePromptTokenCount: tc.toolUse,
+				CandidatesTokenCount:    10,
+				ThoughtsTokenCount:      20,
+				TotalTokenCount:         130 + tc.toolUse,
+			}
+			adapter := NewStreamAdapter(func(yield func(*genai.GenerateContentResponse, error) bool) {
+				if !yield(&genai.GenerateContentResponse{
+					Candidates: []*genai.Candidate{{Content: &genai.Content{Parts: []*genai.Part{{Text: "42"}}}}},
+				}, nil) {
+					return
+				}
+				yield(&genai.GenerateContentResponse{UsageMetadata: metadata}, nil)
+			}, "test-model", tc.trackUsage)
+			t.Cleanup(adapter.Close)
+
+			text, err := adapter.Recv()
+			require.NoError(t, err)
+			assert.Equal(t, "42", text.Choices[0].Delta.Content)
+			assert.Nil(t, text.Usage)
+
+			// Both the usage-only chunk and the terminal event carry the full tally.
+			for i := range 2 {
+				response, err := adapter.Recv()
+				require.NoError(t, err)
+				if i == 1 {
+					assert.Equal(t, chat.FinishReasonStop, response.Choices[0].FinishReason)
+				}
+				if !tc.trackUsage {
+					assert.Nil(t, response.Usage)
+					continue
+				}
+				require.NotNil(t, response.Usage)
+				assert.Equal(t, &chat.Usage{
+					InputTokens:       tc.wantInput,
+					CachedInputTokens: int64(tc.cached),
+					OutputTokens:      30,
+					ReasoningTokens:   20,
+				}, response.Usage)
+				assert.Equal(t, int64(metadata.TotalTokenCount), response.Usage.PromptTokens()+response.Usage.OutputTokens)
+			}
+			_, err = adapter.Recv()
+			require.ErrorIs(t, err, io.EOF)
+		})
+	}
+}
+
 func TestStreamAdapter_FunctionCalls(t *testing.T) {
 	t.Parallel()
 	t.Run("function calls in final message", func(t *testing.T) {

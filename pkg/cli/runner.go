@@ -118,23 +118,32 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		sess.AddMessage(userMsg)
 		sess.AddAttachedFile(attachedPath)
 
+		// Stop only this turn; subsequent user messages still need the parent context.
+		runCtx, stopRun := context.WithCancel(ctx)
+		events := rt.RunStream(runCtx, sess)
+		defer func() {
+			stopRun()
+			for range events {
+			}
+		}()
+
 		if cfg.OutputJSON {
-			for event := range rt.RunStream(ctx, sess) {
+			for event := range events {
 				switch e := event.(type) {
 				case *runtime.ToolCallConfirmationEvent:
 					// JSON mode has no user at stdin — reject unconditionally.
 					// A confirmation event under AutoApprove means a
 					// preempt-yolo hook overrode --yolo; the safe answer is
 					// still Reject (the hook said Ask, not Approve).
-					rt.Resume(ctx, runtime.ResumeReject(""))
+					rt.Resume(runCtx, runtime.ResumeReject(""))
 				case *runtime.ElicitationRequestEvent:
-					_ = rt.ResumeElicitation(ctx, "decline", nil, e.ElicitationID)
+					_ = rt.ResumeElicitation(runCtx, "decline", nil, e.ElicitationID)
 				case *runtime.MaxIterationsReachedEvent:
 					switch handleMaxIterationsAutoApprove(cfg.AutoApprove, &autoExtensions, e.MaxIterations) {
 					case maxIterContinue:
-						rt.Resume(ctx, runtime.ResumeApprove())
+						rt.Resume(runCtx, runtime.ResumeApprove())
 					default: // maxIterStop or maxIterPrompt (no interactive prompt in JSON mode)
-						rt.Resume(ctx, runtime.ResumeReject(""))
+						rt.Resume(runCtx, runtime.ResumeReject(""))
 						return nil
 					}
 				case *runtime.ErrorEvent:
@@ -154,7 +163,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		firstLoop := true
 		lastAgent := rt.CurrentAgentName(ctx)
 		var lastConfirmedToolCallID string
-		for event := range rt.RunStream(ctx, sess) {
+		for event := range events {
 			agentName := event.GetAgentName()
 			if agentName != "" && (firstLoop || lastAgent != agentName) {
 				if !firstLoop {
@@ -178,15 +187,15 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				lastConfirmedToolCallID = e.ToolCall.ID // Store the ID to avoid duplicate printing
 				switch result {
 				case ConfirmationApprove:
-					rt.Resume(ctx, runtime.ResumeApprove())
+					rt.Resume(runCtx, runtime.ResumeApprove())
 				case ConfirmationApproveBalanced:
 					sess.SetSafetyPolicy(session.SafetyPolicyBalanced)
-					rt.Resume(ctx, runtime.ResumeApproveBalanced())
+					rt.Resume(runCtx, runtime.ResumeApproveBalanced())
 				case ConfirmationApproveSession:
 					sess.SetSafetyPolicy(session.SafetyPolicyAutonomous)
-					rt.Resume(ctx, runtime.ResumeApproveAutonomous())
+					rt.Resume(runCtx, runtime.ResumeApproveAutonomous())
 				case ConfirmationReject:
-					rt.Resume(ctx, runtime.ResumeReject(""))
+					rt.Resume(runCtx, runtime.ResumeReject(""))
 					lastConfirmedToolCallID = "" // Clear on reject since tool won't execute
 				case ConfirmationAbort:
 					// Stop the agent loop immediately
@@ -228,20 +237,20 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 			case *runtime.MaxIterationsReachedEvent:
 				switch handleMaxIterationsAutoApprove(cfg.AutoApprove, &autoExtensions, e.MaxIterations) {
 				case maxIterContinue:
-					rt.Resume(ctx, runtime.ResumeApprove())
+					rt.Resume(runCtx, runtime.ResumeApprove())
 				case maxIterStop:
-					rt.Resume(ctx, runtime.ResumeReject(""))
+					rt.Resume(runCtx, runtime.ResumeReject(""))
 					return nil
 				case maxIterPrompt:
 					result := out.PromptMaxIterationsContinue(ctx, e.MaxIterations)
 					switch result {
 					case ConfirmationApprove:
-						rt.Resume(ctx, runtime.ResumeApprove())
+						rt.Resume(runCtx, runtime.ResumeApprove())
 					case ConfirmationReject:
-						rt.Resume(ctx, runtime.ResumeReject(""))
+						rt.Resume(runCtx, runtime.ResumeReject(""))
 						return nil
 					case ConfirmationAbort:
-						rt.Resume(ctx, runtime.ResumeReject(""))
+						rt.Resume(runCtx, runtime.ResumeReject(""))
 						return nil
 					}
 				}
@@ -250,7 +259,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				if !ok || serverURL == "" {
 					// Keep draining after declining forms so follow-up events cannot stall the turn.
 					slog.WarnContext(ctx, "Declining elicitation without form support in CLI mode", "message", e.Message)
-					_ = rt.ResumeElicitation(ctx, "decline", nil, e.ElicitationID)
+					_ = rt.ResumeElicitation(runCtx, "decline", nil, e.ElicitationID)
 					continue
 				}
 
@@ -262,9 +271,9 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 
 				switch result {
 				case ConfirmationApprove:
-					_ = rt.ResumeElicitation(ctx, "accept", nil, e.ElicitationID)
+					_ = rt.ResumeElicitation(runCtx, "accept", nil, e.ElicitationID)
 				case ConfirmationReject:
-					_ = rt.ResumeElicitation(ctx, "decline", nil, e.ElicitationID)
+					_ = rt.ResumeElicitation(runCtx, "decline", nil, e.ElicitationID)
 					return errors.New("OAuth authorization rejected by user")
 				}
 			}

@@ -487,7 +487,11 @@ func extractMimeType(dataURLPrefix string) string {
 
 // BuildConfig creates GenerateContentConfig from model config.
 func (c *Client) buildConfig() *genai.GenerateContentConfig {
-	config := &genai.GenerateContentConfig{}
+	// Set before the NoThinking early return so every request (chat, rerank,
+	// title, compaction) is billed on the same tier.
+	config := &genai.GenerateContentConfig{
+		ServiceTier: genai.ServiceTier(serviceTier(c.ModelConfig.ProviderOpts)),
+	}
 	if c.ModelConfig.MaxTokens != nil {
 		config.MaxOutputTokens = int32(*c.ModelConfig.MaxTokens) //nolint:gosec // user-configured token count; realistic values fit in int32
 	}
@@ -596,8 +600,7 @@ func (c *Client) applyGemini25ThinkingBudget(config *genai.GenerateContentConfig
 	slog.Debug("Gemini request using thinking_budget", "budget_tokens", tokens)
 }
 
-// builtInTools returns Gemini built-in tools (Google Search, Google Maps,
-// Code Execution) enabled via provider_opts.
+// builtInTools returns Gemini built-in tools enabled via provider_opts.
 func (c *Client) builtInTools() []*genai.Tool {
 	entries := []struct {
 		key  string
@@ -606,6 +609,7 @@ func (c *Client) builtInTools() []*genai.Tool {
 		{"google_search", &genai.Tool{GoogleSearch: &genai.GoogleSearch{}}},
 		{"google_maps", &genai.Tool{GoogleMaps: &genai.GoogleMaps{}}},
 		{"code_execution", &genai.Tool{CodeExecution: &genai.ToolCodeExecution{}}},
+		{"url_context", &genai.Tool{URLContext: &genai.URLContext{}}},
 	}
 
 	var builtIn []*genai.Tool
@@ -828,7 +832,7 @@ func (c *Client) CreateChatCompletionStream(
 		applyImageOutputMediaFileInstruction(config)
 	}
 
-	// Start with Google built-in tools (search, maps, code execution) from provider_opts
+	// Start with Google built-in tools from provider_opts
 	builtInTools := c.builtInTools()
 	config.Tools = builtInTools
 
