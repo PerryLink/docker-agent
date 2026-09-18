@@ -1475,23 +1475,3 @@ func TestConvertMessages_ToolResultWithCaching(t *testing.T) {
 	_, isCachePoint = secondLastContent.(*types.ContentBlockMemberCachePoint)
 	assert.True(t, isCachePoint, "assistant tool call message should have cache point")
 }
-
-func TestNewClient_ValidConfig(t *testing.T) {
-	t.Parallel()
-
-	cfg := &latest.ModelConfig{
-		Provider: "amazon-bedrock",
-		Model:    "anthropic.claude-v2",
-		ProviderOpts: map[string]any{
-			"region": "us-east-1",
-		},
-	}
-
-	client, err := NewClient(t.Context(), cfg, environment.NewNoEnvProvider())
-	require.NoError(t, err)
-	require.NotNil(t, client)
-
-	// Verify client was configured correctly
-	assert.Equal(t, "anthropic.claude-v2", client.ModelConfig.Model)
-	assert.Equal(t, "amazon-bedrock", client.ModelConfig.Provider)
-}

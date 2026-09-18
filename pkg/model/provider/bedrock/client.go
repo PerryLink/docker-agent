@@ -7,12 +7,9 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go/auth/bearer"
 
 	"github.com/docker/docker-agent/pkg/chat"
@@ -65,6 +62,9 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		}
 	} else {
 		bearerToken, _ = env.Get(ctx, "AWS_BEARER_TOKEN_BEDROCK")
+	}
+	if bearerToken == "" && bearerTokenRequired {
+		return nil, errors.New("amazon-bedrock requires a bearer token (token_key or AWS_BEARER_TOKEN_BEDROCK): the AWS credential chain is not available in this build")
 	}
 
 	// Build the docker-agent HTTP client (OTel instrumentation, SSE decompression,
@@ -150,10 +150,9 @@ func detectCachingSupport(ctx context.Context, model string, store *modelsdev.St
 	return m.Cost != nil && (m.Cost.CacheRead > 0 || m.Cost.CacheWrite > 0)
 }
 
-func buildAWSConfig(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider) (aws.Config, error) {
-	var configOpts []func(*config.LoadOptions) error
-
-	// Region from provider_opts or environment
+// resolveRegion picks the region from provider_opts, then AWS_REGION /
+// AWS_DEFAULT_REGION, defaulting to us-east-1.
+func resolveRegion(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider) string {
 	region := getProviderOpt[string](cfg.ProviderOpts, "region")
 	if region == "" {
 		region, _ = env.Get(ctx, "AWS_REGION")
@@ -162,39 +161,9 @@ func buildAWSConfig(ctx context.Context, cfg *latest.ModelConfig, env environmen
 		region, _ = env.Get(ctx, "AWS_DEFAULT_REGION")
 	}
 	if region == "" {
-		region = "us-east-1" // Default region
+		region = "us-east-1"
 	}
-	configOpts = append(configOpts, config.WithRegion(region))
-
-	// Profile from provider_opts
-	if profile := getProviderOpt[string](cfg.ProviderOpts, "profile"); profile != "" {
-		configOpts = append(configOpts, config.WithSharedConfigProfile(profile))
-	}
-
-	// Load base config with default credential chain
-	awsCfg, err := config.LoadDefaultConfig(ctx, configOpts...)
-	if err != nil {
-		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
-	}
-
-	// Handle assume role if specified
-	if roleARN := getProviderOpt[string](cfg.ProviderOpts, "role_arn"); roleARN != "" {
-		stsClient := sts.NewFromConfig(awsCfg)
-		creds := stscreds.NewAssumeRoleProvider(stsClient, roleARN, func(o *stscreds.AssumeRoleOptions) {
-			if sessionName := getProviderOpt[string](cfg.ProviderOpts, "role_session_name"); sessionName != "" {
-				o.RoleSessionName = sessionName
-			} else {
-				o.RoleSessionName = "docker-agent-bedrock-session"
-			}
-			if externalID := getProviderOpt[string](cfg.ProviderOpts, "external_id"); externalID != "" {
-				o.ExternalID = aws.String(externalID)
-			}
-		})
-		awsCfg.Credentials = aws.NewCredentialsCache(creds)
-		slog.DebugContext(ctx, "Bedrock using assumed role", "role_arn", roleARN)
-	}
-
-	return awsCfg, nil
+	return region
 }
 
 func (c *Client) CreateChatCompletionStream(
