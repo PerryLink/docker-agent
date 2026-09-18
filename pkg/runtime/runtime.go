@@ -788,11 +788,8 @@ func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*Loca
 		return nil, fmt.Errorf("register %q builtin: %w", BuiltinCacheResponse, err)
 	}
 
-	// Build the cooldown manager and wire the fallback executor's
-	// runtime-bound dependencies after opts so they pick up the final
-	// clock and telemetry sink ([WithClock] / [WithTelemetry]).
+	// Build cooldowns after opts so they pick up [WithClock].
 	r.fallback.cooldowns = newCooldownManager(r.now)
-	r.fallback.telemetry = r.telemetry
 
 	// Default the runtime's working directory to the process CWD when no
 	// caller supplied one. This matches the session's default and ensures

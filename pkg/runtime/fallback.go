@@ -35,11 +35,9 @@ type modelWithFallback struct {
 // lives here. [LocalRuntime] holds a single *fallbackExecutor and
 // delegates the model-attempt loop to [fallbackExecutor.execute].
 //
-// The executor's [cooldowns] and [telemetry] fields are wired in
-// [NewLocalRuntime] *after* options have been applied, so that
-// [WithClock] / [WithTelemetry] are reflected. [WithRetryOnRateLimit]
-// mutates the executor directly, so the executor itself must exist
-// before opts run; the field assignments after opts complete the wiring.
+// Cooldowns are wired after options so [WithClock] is reflected.
+// [WithRetryOnRateLimit] mutates the executor directly, so the executor
+// itself must exist before opts run.
 type fallbackExecutor struct {
 	// prepareMessages applies runtime message transforms for the provider
 	// selected for each attempt. It is set by [NewLocalRuntime].
@@ -60,16 +58,10 @@ type fallbackExecutor struct {
 	// Wired in [NewLocalRuntime] after opts so the cooldown windows
 	// honour [WithClock]; safe for concurrent use.
 	cooldowns *cooldownManager
-
-	// telemetry is forwarded to [handleStream] so it can record per-
-	// stream observability (token usage, finish reason, errors). Wired
-	// in [NewLocalRuntime] after opts so [WithTelemetry] is reflected.
-	telemetry Telemetry
 }
 
 // newFallbackExecutor returns a *fallbackExecutor with rate-limit retries
-// off; [cooldowns] and [telemetry] are wired in [NewLocalRuntime] once
-// runtime opts have finalised the clock and telemetry sink.
+// off; cooldowns are wired in [NewLocalRuntime] after clock options.
 func newFallbackExecutor() *fallbackExecutor {
 	return &fallbackExecutor{}
 }
@@ -276,7 +268,6 @@ func (e *fallbackExecutor) execute(
 	messages []chat.Message,
 	agentTools []tools.Tool,
 	sess *session.Session,
-	m *modelsdev.Model,
 	events EventSink,
 	idleRetry *idleStreamRetryAllowance,
 	admitIdleRetry idleRetryAdmission,
@@ -388,7 +379,7 @@ func (e *fallbackExecutor) execute(
 				}
 			}
 
-			res, err := handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, m, e.telemetry, events, defaultStreamIdleTimeout)
+			res, err := handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, events, defaultStreamIdleTimeout)
 			streamCancel(nil) // always release the child context
 			if err != nil {
 				lastErr = err
@@ -426,7 +417,7 @@ func (e *fallbackExecutor) execute(
 					fbSpan.IncrementAttempt()
 					stream, err = modelEntry.provider.CreateChatCompletionStream(streamCtx, attemptMessages, attemptTools)
 					if err == nil {
-						res, err = handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, m, e.telemetry, events, defaultStreamIdleTimeout)
+						res, err = handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, events, defaultStreamIdleTimeout)
 					}
 					streamCancel(nil)
 					if err == nil {
