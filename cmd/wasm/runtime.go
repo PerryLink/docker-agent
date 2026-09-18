@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/modelsdev"
+	"github.com/docker/docker-agent/pkg/rag"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/teamloader"
@@ -45,15 +46,19 @@ type sessionOptions struct {
 	AutoApprove bool
 	// History seeds the first conversation (the stateless chat API).
 	History []chat.Message
+	// Documents are the session's documents, keyed by logical path: the
+	// only thing `type: rag` toolsets can index. Nothing is read from disk.
+	Documents rag.Documents
 }
 
 // host holds the registries every session is built from. The browser entry
 // point uses the demo providers and the browser toolsets; tests inject
 // mocked ones. Toolset registries are built per session so stateful
-// toolsets are shared within a team but never across sessions.
+// toolsets are shared within a team but never across sessions, and so the
+// rag toolset sees the session's documents.
 type host struct {
 	providers   *provider.Registry
-	newToolsets func() teamloader.ToolsetRegistry
+	newToolsets func(documents rag.Documents) teamloader.ToolsetRegistry
 }
 
 var browserHost = host{providers: demoProviders, newToolsets: browserToolsets}
@@ -79,6 +84,11 @@ var browserBuiltinHooks = []string{
 var modelsStore = sync.OnceValue(func() *modelsdev.Store {
 	return modelsdev.NewDatabaseStore(modelsdev.EmbeddedSnapshot())
 })
+
+// browserWorkingDir is the session's working directory. There is no
+// filesystem behind it; it is what relative paths in the config resolve
+// against, RAG docs included.
+const browserWorkingDir = "/"
 
 // lifetimeContext returns the context a session lives in. It carries the
 // egress proxy so every request the runtime makes on the session's behalf,
@@ -107,16 +117,16 @@ func (h host) newSession(ctx context.Context, opts sessionOptions) (*embeddedcha
 		return nil, err
 	}
 	runConfig := &config.RuntimeConfig{
-		Config:                 config.Config{WorkingDir: "/"},
+		Config:                 config.Config{WorkingDir: browserWorkingDir},
 		EnvProviderOverride:    environment.NewMapEnvProvider(opts.Env),
 		ModelsDevStoreOverride: modelsStore(),
 	}
-	if err := checkBrowserConfig(ctx, cfg, opts.AgentName, runConfig.EnvProvider()); err != nil {
+	if err := checkBrowserConfig(ctx, cfg, opts.AgentName, runConfig.EnvProvider(), opts.Documents); err != nil {
 		return nil, err
 	}
 
 	runtimeOpts := []runtime.Opt{
-		runtime.WithWorkingDir("/"),
+		runtime.WithWorkingDir(browserWorkingDir),
 		runtime.WithModelStore(modelsStore()),
 		runtime.WithProviderRegistry(h.providers),
 		// The host owns the browser: it opens the authorize URL and relays
@@ -146,7 +156,7 @@ func (h host) newSession(ctx context.Context, opts sessionOptions) (*embeddedcha
 		RuntimeConfig: runConfig,
 		LoadOpts: []teamloader.Opt{
 			teamloader.WithProviderRegistry(h.providers),
-			teamloader.WithToolsetRegistry(h.newToolsets()),
+			teamloader.WithToolsetRegistry(h.newToolsets(opts.Documents)),
 			// ${...} in instructions is plain JavaScript over the session
 			// env: goja has no I/O, so nothing reaches the host.
 			teamloader.WithExpander(js.NewJsExpander),
@@ -166,8 +176,10 @@ func (h host) newSession(ctx context.Context, opts sessionOptions) (*embeddedcha
 
 // checkBrowserConfig rejects config that strict loading would accept but
 // that cannot work in the browser: local files, host processes, and
-// toolset declarations that point at them (see checkBrowserToolset).
-func checkBrowserConfig(ctx context.Context, cfg *latest.Config, agentName string, env environment.Provider) error {
+// toolset declarations that point at them (see checkBrowserToolset). The
+// loader only warns when a toolset fails to build, so this is what turns
+// those into a createSession rejection.
+func checkBrowserConfig(ctx context.Context, cfg *latest.Config, agentName string, env environment.Provider, documents rag.Documents) error {
 	if agentName != "" && !slices.ContainsFunc(cfg.Agents, func(a latest.AgentConfig) bool { return a.Name == agentName }) {
 		return fmt.Errorf("agent %q not found", agentName)
 	}
@@ -182,7 +194,7 @@ func checkBrowserConfig(ctx context.Context, cfg *latest.Config, agentName strin
 			errs = append(errs, fmt.Errorf("%s.cache.path: local files are not available in the browser", loc))
 		}
 		for j, ts := range a.Toolsets {
-			if err := checkBrowserToolset(ctx, ts, env); err != nil {
+			if err := checkBrowserToolset(ctx, ts, env, documents); err != nil {
 				errs = append(errs, fmt.Errorf("%s.toolsets[%d]: %w", loc, j, err))
 			}
 		}

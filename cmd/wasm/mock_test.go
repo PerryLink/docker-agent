@@ -4,9 +4,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,6 +22,7 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/base"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/modelsdev"
+	"github.com/docker/docker-agent/pkg/rag"
 	"github.com/docker/docker-agent/pkg/teamloader"
 	"github.com/docker/docker-agent/pkg/tools"
 )
@@ -141,6 +145,28 @@ func stop(finish chat.FinishReason, input, output int64) chat.MessageStreamRespo
 	}
 }
 
+// keywordEmbedder is an offline embedding model: vectors count the words
+// "vacation" and "expense" so related texts land close together.
+type keywordEmbedder struct {
+	calls atomic.Int64
+}
+
+func (e *keywordEmbedder) ID() modelsdev.ID        { return modelsdev.NewID("mock", "embed") }
+func (e *keywordEmbedder) BaseConfig() base.Config { return base.Config{} }
+
+func (e *keywordEmbedder) CreateChatCompletionStream(context.Context, []chat.Message, []tools.Tool) (chat.MessageStream, error) {
+	return nil, errors.New("embedding model only")
+}
+
+func (e *keywordEmbedder) CreateEmbedding(_ context.Context, text string) (*base.EmbeddingResult, error) { //nolint:unparam // provider.EmbeddingProvider signature
+	e.calls.Add(1)
+	lower := strings.ToLower(text)
+	return &base.EmbeddingResult{
+		Embedding:   []float64{float64(strings.Count(lower, "vacation")), float64(strings.Count(lower, "expense")), 0.1},
+		TotalTokens: 1,
+	}, nil
+}
+
 // mockProviders serves `mock/<name>` model references from models.
 func mockProviders(models map[string]provider.Provider) *provider.Registry {
 	return provider.NewRegistry(map[string]provider.Factory{
@@ -194,8 +220,8 @@ func (e *echoToolSet) callCount() int {
 func testHost(echo *echoToolSet, models map[string]provider.Provider) host {
 	return host{
 		providers: mockProviders(models),
-		newToolsets: func() teamloader.ToolsetRegistry {
-			creators := browserToolsetCreators()
+		newToolsets: func(documents rag.Documents) teamloader.ToolsetRegistry {
+			creators := browserToolsetCreators(documents)
 			creators["echo"] = func(context.Context, latest.Toolset, string, *config.RuntimeConfig, string) (tools.ToolSet, error) {
 				return echo, nil
 			}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/model/provider"
+	"github.com/docker/docker-agent/pkg/rag"
 )
 
 func TestCompatChatDeclinesConfirmationWithoutHandler(t *testing.T) {
@@ -155,6 +156,31 @@ func TestParseDecisionAndElicitationAnswer(t *testing.T) {
 	assert.Equal(t, "cancel", action)
 	_, action, _ = parseElicitationAnswer(eval("undefined"))
 	assert.Equal(t, "decline", action)
+}
+
+func TestJSDocuments(t *testing.T) {
+	eval := func(src string) js.Value { return js.Global().Call("eval", "("+src+")") }
+
+	docs, err := jsDocuments(eval("undefined"))
+	require.NoError(t, err)
+	assert.Nil(t, docs, "no documents means the rag toolset has nothing to select from")
+
+	docs, err = jsDocuments(eval("({'guide.md': 'hello', 'notes/todo.md': ''})"))
+	require.NoError(t, err)
+	assert.Equal(t, rag.Documents{"guide.md": []byte("hello"), "notes/todo.md": []byte{}}, docs)
+
+	for name, tc := range map[string]struct{ src, want string }{
+		"not an object": {"'guide.md'", "must be an object"},
+		"non-string":    {"({'guide.md': 42})", `"guide.md" must be a string`},
+		"empty path":    {"({'  ': 'x'})", "must not be empty"},
+		"too many":      {"Object.fromEntries(Array.from({length: 1001}, (_, i) => ['d' + i, 'x']))", "exceed the limit of 1000"},
+		"too large":     {"({a: 'x'.repeat(9 << 20), b: 'y'.repeat(8 << 20)})", "bytes in total"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := jsDocuments(eval(tc.src))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 }
 
 func TestAwaitJS(t *testing.T) {

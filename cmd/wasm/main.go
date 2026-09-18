@@ -31,7 +31,11 @@
 //	dockerAgent.chat({...options, messages}, onEvent) -> Promise<{message, usage?}>
 //	dockerAgent.abort() -> void   // cancels the in-flight chat() call
 //
-// options: {yaml, agentName?, env?, toolProxy?, oauthRedirectURI?, autoApprove?}
+// options: {yaml, agentName?, env?, toolProxy?, oauthRedirectURI?, autoApprove?, documents?}
+//
+// documents is a {"logical/path.md": "content", ...} object: the documents
+// `type: rag` toolsets index for the session (their `docs` select among
+// these paths). At most maxDocuments entries and maxDocumentBytes in total.
 //
 // A session handle offers:
 //
@@ -75,11 +79,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"syscall/js"
 
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/rag"
 )
 
 // compatState tracks the chat() call in flight so abort() can cancel it.
@@ -165,6 +171,10 @@ func parseSessionOptions(opts js.Value) (sessionOptions, error) {
 	if opts.Get("yaml").Type() != js.TypeString {
 		return sessionOptions{}, errors.New("options.yaml must be a string")
 	}
+	documents, err := jsDocuments(opts.Get("documents"))
+	if err != nil {
+		return sessionOptions{}, fmt.Errorf("options.documents: %w", err)
+	}
 	return sessionOptions{
 		YAML:             opts.Get("yaml").String(),
 		AgentName:        stringField(opts, "agentName"),
@@ -172,7 +182,50 @@ func parseSessionOptions(opts js.Value) (sessionOptions, error) {
 		ToolProxy:        stringField(opts, "toolProxy"),
 		OAuthRedirectURI: stringField(opts, "oauthRedirectURI"),
 		AutoApprove:      boolField(opts, "autoApprove"),
+		Documents:        documents,
 	}, nil
+}
+
+// Caps on the documents one session may carry: the index lives in memory
+// and embedding strategies send every chunk to a model.
+const (
+	maxDocuments     = 1000
+	maxDocumentBytes = 16 << 20
+)
+
+// jsDocuments copies a {path: content} object into the session's documents.
+// Values must be strings: there is no fallback that could quietly index a
+// stringified object.
+func jsDocuments(v js.Value) (rag.Documents, error) {
+	switch v.Type() {
+	case js.TypeUndefined, js.TypeNull:
+		return nil, nil
+	case js.TypeObject:
+	default:
+		return nil, errors.New("must be an object of path to content")
+	}
+	keys := js.Global().Get("Object").Call("keys", v)
+	if keys.Length() > maxDocuments {
+		return nil, fmt.Errorf("%d documents exceed the limit of %d", keys.Length(), maxDocuments)
+	}
+	documents := make(rag.Documents, keys.Length())
+	total := 0
+	for i := range keys.Length() {
+		path := keys.Index(i).String()
+		content := v.Get(path)
+		if strings.TrimSpace(path) == "" {
+			return nil, errors.New("document paths must not be empty")
+		}
+		if content.Type() != js.TypeString {
+			return nil, fmt.Errorf("document %q must be a string", path)
+		}
+		text := content.String()
+		if total += len(text); total > maxDocumentBytes {
+			return nil, fmt.Errorf("documents exceed the limit of %d bytes in total", maxDocumentBytes)
+		}
+		documents[path] = []byte(text)
+	}
+	return documents, nil
 }
 
 func onEventArg(args []js.Value) js.Value {

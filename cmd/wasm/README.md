@@ -170,6 +170,7 @@ when a model's API key is missing from `env`, or when `agentName` is unknown.
 | `toolProxy?` | HTTPS URL of a trusted egress proxy (`httpclient.WithEgressProxy`). Browsers cannot enforce the SSRF guard on `fetch`, so remote MCP, `fetch`, `api` and `openapi` requests are routed through it and fail closed without one (unless the toolset sets `allow_private_ips: true`). |
 | `oauthRedirectURI?` | `redirect_uri` advertised for MCP server OAuth flows; the flow itself is relayed to the host as an `elicitation` event. |
 | `autoApprove?` | Run tool calls without asking, like `--yolo`. Otherwise calls the safety policy does not clear raise a `tool_confirmation` event. |
+| `documents?` | `{"handbook/leave.md": "...", ...}` — the session's documents, keyed by logical path. They are the only thing `type: rag` toolsets can index: a RAG's `docs` select among these paths (exact path, directory prefix or glob), and a `docs` entry selecting nothing rejects the session. Values must be strings; at most 1000 documents and 16 MiB in total. See `examples/handbook-rag.yaml`. |
 
 The trusted proxy receives the target URL in the `url` query parameter, with
 the original method, body and credentials. It must enforce destination IP
@@ -257,10 +258,10 @@ What the browser build supports, and what it refuses and why.
 
 | Area | In the browser |
 | --- | --- |
-| Toolsets | `mcp` (remote only), `think`, `todo`, `plan`, `memory`, `user_prompt`, `session_context`, `fetch`, `api`, `openapi`, `model_picker`. See `examples/portable-team.yaml`. |
+| Toolsets | `mcp` (remote only), `think`, `todo`, `plan`, `memory`, `user_prompt`, `session_context`, `fetch`, `api`, `openapi`, `model_picker`, `rag` (over `documents`). See `examples/portable-team.yaml` and `examples/handbook-rag.yaml`. |
 | Toolset options | `tools`, `readonly`, `instruction`, `model`, `toon`, `defer`, `timeout`, `allow_private_ips`. |
 | Agent features | `code_mode_tools`, sub-agents, handoffs, fallbacks, compaction, `add_date`, `add_environment_info`, structured output, `${...}` JavaScript in instructions and descriptions. |
-| Hooks | `type: builtin` only: `add_context`, `add_date`, `add_environment_info`, `limit_large_tool_results`, `max_iterations`, `redact_secrets`. |
+| Hooks | `type: builtin` only: `add_context`, `add_date`, `add_environment_info`, `limit_large_tool_results`, `max_iterations`, `redact_secrets`. `limit_large_tool_results` keeps only the bounded tail excerpt: there is no filesystem to spill the full result to, and the notice says so. |
 | Providers | OpenAI (all API variants), Anthropic and Google, registered in `providers.go`. |
 
 Stateful toolsets are scoped to the session: a `todo` with `shared: true`,
@@ -282,15 +283,27 @@ evaluator is not wired.
 MCP: in a browser they go through `toolProxy` and fail closed without one,
 unless the toolset sets `allow_private_ips: true`.
 
+`rag` runs the shared `pkg/rag` pipeline — `bm25`, `chunked-embeddings` and
+`semantic-embeddings`, fusion and reranking — over the session's `documents`
+instead of files: the index is built in memory when the tool first starts,
+results report the documents' logical paths, `return_full_content` reads
+the supplied document, and nothing is watched since the documents cannot
+change. Embedding and reranking models are ordinary `models` entries and
+need their API key in `env`. A RAG whose `docs` select none of the supplied
+documents is rejected when the session is created.
+
 ### Refused
 
 - **Toolsets**: `mcp` only with `remote.url`. stdio servers (`command`),
   catalog references (`ref`) and the local-only MCP fields (`working_dir`,
   `env`, `config`, `version`, `path`) are rejected rather than ignored.
   `shell`, `script`, `filesystem`, `file`, `git`, `background_jobs`, `lsp`,
-  `tasks`, `rag`, `environment`, `scheduler`, `webhook`, `open_url`, `a2a`,
+  `tasks`, `environment`, `scheduler`, `webhook`, `open_url`, `a2a`,
   `mcp_catalog` and `background_agents` need a process, a filesystem, a
   socket or the host environment and are not registered.
+- **RAG**: a strategy `database` (nothing persists), `chunking.code_aware`
+  (tree-sitter needs cgo) and `respect_vcs: true` (no checkout) are
+  rejected; `docs` never reach the filesystem.
 - **Hooks**: `type: command` and the builtins that read files or run git.
 - **Local files**: `add_prompt_files`, `cache.path`, `skills`, `memory.path`,
   non-HTTP `openapi.url`.
@@ -303,7 +316,8 @@ unless the toolset sets `allow_private_ips: true`.
   cloud credentials and browser transport require additional configuration.
   Docker Model Runner discovery needs the host CLI.
 - **No persistence**: sessions live in memory for the lifetime of the tab;
-  todos, plans, memories and MCP OAuth tokens are per-session, in memory.
+  todos, plans, memories, RAG indexes and MCP OAuth tokens are per-session,
+  in memory.
 - **models.dev**: the catalog baked into the binary is used; there is no
   cache directory to refresh it into.
 - **CORS**: see above. Real deployment needs a proxy for most providers.
@@ -314,7 +328,7 @@ unless the toolset sets `allow_private_ips: true`.
 | --- | --- |
 | `main.go` | JS API registration, `parseConfig`/`listAgents`, `createSession`, the stateless `chat()`/`abort()`. |
 | `runtime.go` | Builds an `embeddedchat.Session` from YAML with the browser registries and loader features; audits the config for host-only features. |
-| `toolsets.go` | The per-session toolset registry: remote MCP plus the portable builtins, and the per-toolset browser checks. |
+| `toolsets.go` | The per-session toolset registry: remote MCP plus the portable builtins, `rag` over the session documents, and the per-toolset browser checks. |
 | `session.go` | `chatSession`: one conversation, its lifetime context, send/confirm/abort/restart/close. JS-agnostic, tested from Go. |
 | `events.go` | Projects runtime events onto the JS event shapes. |
 | `handle.go` | The JS session object and the lifetime of its callbacks. |
