@@ -1091,3 +1091,24 @@ func TestGetAllErrors(t *testing.T) {
 		assert.NotContains(t, msg.Message.Content, "failure", "errors must not leak into messages")
 	}
 }
+
+func TestGetMessagesUsageOnlyDoesNotConsumeHistoryLimit(t *testing.T) {
+	t.Parallel()
+
+	s := New(WithMessages([]Item{
+		NewMessageItem(UserMessage("question")),
+		NewMessageItem(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "answer"}}),
+		NewMessageItem(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Usage: &chat.Usage{InputTokens: 10}, Cost: 0.01}}),
+	}))
+	a := agent.New("root", "", agent.WithNumHistoryItems(2))
+	var conversation []chat.Message
+	for _, msg := range s.GetMessages(a) {
+		if msg.Role != chat.MessageRoleSystem {
+			conversation = append(conversation, msg)
+		}
+	}
+	require.Len(t, conversation, 2)
+	assert.Equal(t, "question", conversation[0].Content)
+	assert.Equal(t, "answer", conversation[1].Content)
+	assert.InDelta(t, 0.01, s.TotalCost(), 1e-9)
+}
