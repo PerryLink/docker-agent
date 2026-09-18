@@ -77,7 +77,9 @@ type Runtime interface {
 	EmitAgentInfo(ctx context.Context, events EventSink)
 	// ResetStartupInfo resets the startup info emission flag, allowing re-emission
 	ResetStartupInfo()
-	// RunStream starts the agent's interaction loop and returns a channel of events
+	// RunStream starts the agent's interaction loop and returns a channel of events.
+	// Consumers must drain it to closure before releasing turn ownership, even
+	// after cancellation. Cancel the supplied context before draining on errors.
 	RunStream(ctx context.Context, sess *session.Session) <-chan Event
 	// Run starts the agent's interaction loop and returns the final messages
 	Run(ctx context.Context, sess *session.Session) ([]session.Message, error)

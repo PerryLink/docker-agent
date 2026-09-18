@@ -702,7 +702,14 @@ func (a *Agent) runAgent(ctx context.Context, acpSess *Session) error {
 		slog.DebugContext(ctx, "Failed to emit available commands", "error", err)
 	}
 
-	eventsChan := acpSess.rt.RunStream(ctx, acpSess.sess)
+	runCtx, cancel := context.WithCancel(ctx)
+	eventsChan := acpSess.rt.RunStream(runCtx, acpSess.sess)
+	// Cancel on handler errors too, before waiting for runtime teardown.
+	defer func() {
+		cancel()
+		for range eventsChan {
+		}
+	}()
 	toolCallArgs := map[string]string{}
 
 	for event := range eventsChan {

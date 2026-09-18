@@ -1152,7 +1152,14 @@ func (r *LocalRuntime) runTurn(
 // messages. This is a convenience wrapper around RunStream for non-streaming
 // callers.
 func (r *LocalRuntime) Run(ctx context.Context, sess *session.Session) ([]session.Message, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	events := r.RunStream(ctx, sess)
+	// Cancel before draining so error returns cannot strand the producer.
+	defer func() {
+		cancel()
+		for range events {
+		}
+	}()
 	for event := range events {
 		if errEvent, ok := event.(*ErrorEvent); ok {
 			return nil, fmt.Errorf("%s", errEvent.Error)

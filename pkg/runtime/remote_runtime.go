@@ -313,7 +313,14 @@ func (r *RemoteRuntime) RunStream(ctx context.Context, sess *session.Session) <-
 
 // Run starts the agent's interaction loop and returns the final messages
 func (r *RemoteRuntime) Run(ctx context.Context, sess *session.Session) ([]session.Message, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	eventsChan := r.RunStream(ctx, sess)
+	// Cancel before draining so error returns cannot strand the forwarder.
+	defer func() {
+		cancel()
+		for range eventsChan {
+		}
+	}()
 
 	for event := range eventsChan {
 		if errEvent, ok := event.(*ErrorEvent); ok {

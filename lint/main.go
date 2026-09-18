@@ -55,6 +55,7 @@ var programCops = []prog.Cop{
 	SessionStateAccessors,
 	StreamCloseSafety,
 	ExclusiveStreamLease,
+	DrainRunStreamBeforeRelease,
 	rubocops.NewLintContextConnectivity(),
 }
 

@@ -1167,6 +1167,12 @@ func (sm *SessionManager) RunSession(ctx context.Context, sessionID, agentFilena
 		}
 
 		stream := runtimeSession.runtime.RunStream(streamCtx, sess)
+		// Teardown must finish before the deferred streaming.Unlock.
+		defer func(events <-chan runtime.Event) {
+			cancel()
+			for range events {
+			}
+		}(stream)
 		for stream != nil {
 			select {
 			case event, ok := <-titleEvents:
