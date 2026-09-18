@@ -56,11 +56,14 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		return nil, errors.New("environment provider is required")
 	}
 
-	if err := validateThinkingDisplay(cfg); err != nil {
+	if err := validateThinkingOptions(cfg); err != nil {
 		slog.ErrorContext(ctx, "Anthropic client creation failed", "error", err)
 		return nil, err
 	}
 
+	if err := validateCachePreservingUpdates(cfg); err != nil {
+		return nil, err
+	}
 	globalOptions := options.Apply(opts...)
 
 	anthropicClient := &Client{
@@ -142,12 +145,15 @@ func NewClientFromFactory(ctx context.Context, cfg *latest.ModelConfig, env envi
 	if factory == nil {
 		return nil, errors.New("client factory is required")
 	}
-	if err := validateThinkingDisplay(cfg); err != nil {
+	if err := validateThinkingOptions(cfg); err != nil {
 		return nil, err
 	}
 
 	// Apply options before invoking the factory so option side effects keep
 	// their pre-refactor ordering relative to credential discovery.
+	if err := validateCachePreservingUpdates(cfg); err != nil {
+		return nil, err
+	}
 	globalOptions := options.Apply(opts...)
 
 	client, err := factory(ctx)
@@ -236,7 +242,9 @@ func (c *Client) CreateChatCompletionStream(
 	//  - task_budget (requires the task-budgets beta header)
 	if c.interleavedThinkingEnabled() ||
 		c.ModelOptions.StructuredOutput() != nil ||
-		!c.ModelConfig.TaskBudget.IsZero() {
+		!c.ModelConfig.TaskBudget.IsZero() || c.thinkingBindingBehavior() != "" ||
+		c.progressUpdatesEnabled() ||
+		cacheDiagnosticsEnabled(c.ModelConfig.ProviderOpts) || cachePreservingUpdatesEnabled(c.ModelConfig.ProviderOpts) || hasNativeCompaction(messages) {
 		return c.createBetaStream(ctx, client, messages, requestTools, maxTokens)
 	}
 
@@ -245,6 +253,13 @@ func (c *Client) CreateChatCompletionStream(
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to convert tools for Anthropic request", "error", err)
 		return nil, err
+	}
+
+	if sel, enabled := strictToolsOpt(c.ModelConfig.ProviderOpts); enabled {
+		restoreStrictToolSchemas(allTools, requestTools)
+		if err := sel.apply(allTools); err != nil {
+			return nil, err
+		}
 	}
 
 	converted, err := c.convertMessagesWithDeferred(ctx, messages, requestTools)
@@ -270,7 +285,7 @@ func (c *Client) CreateChatCompletionStream(
 
 	// Temperature and TopP cannot be set when extended thinking is enabled
 	// (Anthropic requires temperature=1.0 which is the default when thinking is on)
-	if !thinkingEnabled {
+	if !thinkingEnabled && !rejectsSampling(c.ModelConfig.Model) {
 		if c.ModelConfig.Temperature != nil {
 			params.Temperature = param.NewOpt(*c.ModelConfig.Temperature)
 		}
@@ -282,7 +297,7 @@ func (c *Client) CreateChatCompletionStream(
 	}
 
 	// Forward top_k from provider_opts (Anthropic natively supports it)
-	if topK, ok := providerutil.GetProviderOptInt64(c.ModelConfig.ProviderOpts, "top_k"); ok {
+	if topK, ok := providerutil.GetProviderOptInt64(c.ModelConfig.ProviderOpts, "top_k"); ok && !rejectsSampling(c.ModelConfig.Model) {
 		params.TopK = param.NewOpt(topK)
 		slog.DebugContext(ctx, "Anthropic provider_opts: set top_k", "value", topK)
 	}
@@ -380,13 +395,18 @@ func (c *Client) convertMessagesWithDeferred(ctx context.Context, messages []cha
 			continue
 		}
 		if msg.Role == chat.MessageRoleAssistant {
+			if blocks, ok, err := replayContent(msg); err != nil {
+				return nil, err
+			} else if ok {
+				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
+				pendingAssistantToolUse = len(msg.ToolCalls) > 0
+				continue
+			}
 			contentBlocks := make([]anthropic.ContentBlockParamUnion, 0)
 
 			// Include thinking blocks when present to preserve extended thinking context
-			if msg.ReasoningContent != "" && msg.ThinkingSignature != "" {
+			if msg.ProviderState == nil && msg.ThinkingSignature != "" {
 				contentBlocks = append(contentBlocks, anthropic.NewThinkingBlock(msg.ThinkingSignature, msg.ReasoningContent))
-			} else if msg.ThinkingSignature != "" {
-				contentBlocks = append(contentBlocks, anthropic.NewRedactedThinkingBlock(msg.ThinkingSignature))
 			}
 
 			if len(msg.ToolCalls) > 0 {

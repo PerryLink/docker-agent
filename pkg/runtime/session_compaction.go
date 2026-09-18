@@ -53,8 +53,10 @@ func (r *LocalRuntime) sessionCompactionEnabled(a *agent.Agent) bool {
 //     events; the conversation is left untouched.
 //   - If a BeforeCompaction hook supplies a non-empty Summary in
 //     HookSpecificOutput, the runtime applies that summary verbatim and
-//     skips the LLM-based summarization entirely. The kept-tail policy
-//     stays consistent across both paths via [compactor.ComputeFirstKeptEntry].
+//     skips both native and LLM-based summarization. The kept-tail policy
+//     stays consistent across the hook and LLM paths via
+//     [compactor.ComputeFirstKeptEntry]; native compaction keeps no tail
+//     (see [LocalRuntime.compactNatively]).
 //   - AfterCompaction fires after the summary has been applied; it is
 //     observational.
 //
@@ -92,27 +94,37 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 	}()
 
 	// Choose the strategy: a hook-supplied summary if before_compaction
-	// returned one, otherwise the default LLM strategy.
+	// returned one, then provider-native compaction when the model opts in,
+	// otherwise the default LLM strategy.
 	result := summaryFromHook(sess, a, pre, contextLimit)
 	if result == nil {
-		if contextLimit <= 0 {
-			slog.ErrorContext(ctx, "Failed to generate session summary",
-				"error", "model definition unavailable")
-			events.Emit(ErrorForSession(sess.ID, "Failed to get model definition"))
+		native, err := nativeCompactor(ctx, a)
+		if err != nil {
+			slog.ErrorContext(ctx, "Failed to generate session summary", "error", err)
+			events.Emit(ErrorForSession(sess.ID, err.Error()))
 			outcome = CompactionOutcomeFailed
 			return
 		}
-
-		var err error
-		result, err = compactor.RunLLM(ctx, compactor.LLMArgs{
-			Session:          sess,
-			Agent:            a,
-			AdditionalPrompt: additionalPrompt,
-			ContextLimit:     contextLimit,
-			RunAgent: func(ctx context.Context, summaryAgent *agent.Agent, summarySession *session.Session) error {
-				return r.runCompactionAgent(ctx, summaryAgent, summarySession, sess, events)
-			},
-		})
+		if native != nil {
+			result, err = r.compactNatively(ctx, sess, a, native, additionalPrompt, events)
+		} else {
+			if contextLimit <= 0 {
+				slog.ErrorContext(ctx, "Failed to generate session summary",
+					"error", "model definition unavailable")
+				events.Emit(ErrorForSession(sess.ID, "Failed to get model definition"))
+				outcome = CompactionOutcomeFailed
+				return
+			}
+			result, err = compactor.RunLLM(ctx, compactor.LLMArgs{
+				Session:          sess,
+				Agent:            a,
+				AdditionalPrompt: additionalPrompt,
+				ContextLimit:     contextLimit,
+				RunAgent: func(ctx context.Context, summaryAgent *agent.Agent, summarySession *session.Session) error {
+					return r.runCompactionAgent(ctx, summaryAgent, summarySession, sess, events)
+				},
+			})
+		}
 		if errors.Is(err, errCompactionBudgetExceeded) {
 			outcome = CompactionOutcomeSkipped
 			return
@@ -147,6 +159,7 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 		Cost:           result.Cost,
 		Model:          result.Model,
 		Usage:          summaryUsage(result),
+		Compaction:     result.Compaction,
 	}
 	// Atomically persist the metadata and summary before mutating the live
 	// session. A failed write is a failed compaction: no success summary event
@@ -158,6 +171,9 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 		return
 	}
 
+	if result.Compaction != nil {
+		r.toolDeferrals.Reset(sess.ID)
+	}
 	slog.DebugContext(ctx, "Generated session summary", "session_id", sess.ID, "summary_length", len(result.Summary))
 	summaryEvent := SessionSummary(sess.ID, result.Summary, a.Name(), result.FirstKeptEntry, result.Cost, result.Model, summaryUsage(result))
 	if e, ok := summaryEvent.(*SessionSummaryEvent); ok {

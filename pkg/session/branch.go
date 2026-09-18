@@ -141,6 +141,7 @@ func (s *Session) Clone() *Session {
 			usageCopy := *item.Usage
 			clone.Messages[i].Usage = &usageCopy
 		}
+		clone.Messages[i].Compaction = item.Compaction.Clone()
 	}
 	return clone
 }
@@ -160,7 +161,7 @@ func cloneSessionItem(item Item) (Item, error) {
 		}
 		return Item{SubSession: clonedSub}, nil
 	case item.Summary != "":
-		cloned := Item{Summary: item.Summary, FirstKeptEntry: item.FirstKeptEntry, Cost: item.Cost, Model: item.Model}
+		cloned := Item{Summary: item.Summary, FirstKeptEntry: item.FirstKeptEntry, Cost: item.Cost, Model: item.Model, Compaction: item.Compaction.Clone()}
 		if item.Usage != nil {
 			usageCopy := *item.Usage
 			cloned.Usage = &usageCopy

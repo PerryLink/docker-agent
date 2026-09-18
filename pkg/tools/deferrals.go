@@ -56,3 +56,11 @@ func (t *DeferralTracker) MarkAt(sessionID, toolCallID string, requestTools []To
 	}
 	return marked
 }
+
+// Reset forgets load points after the history containing them was compacted.
+func (t *DeferralTracker) Reset(sessionID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.initial, sessionID)
+	delete(t.loadPointBy, sessionID)
+}

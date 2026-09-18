@@ -103,6 +103,10 @@ type Result struct {
 	// parent session after compaction. The runtime assigns it to
 	// sess.InputTokens; sess.OutputTokens is reset to 0.
 	InputTokens int64
+	// Compaction is the provider-native payload behind Summary (nil for
+	// the LLM and hook strategies). The runtime persists it on the
+	// summary item so the producing provider can replay it.
+	Compaction *chat.CompactionResult
 }
 
 // RunAgent runs an agent against a session, blocking until the agent

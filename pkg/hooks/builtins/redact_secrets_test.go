@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/docker/portcullis"
@@ -390,4 +391,137 @@ func TestRedactSecretsToolInputTransformEndToEnd(t *testing.T) {
 	assert.NotContains(t, cmd, secret)
 	assert.Contains(t, cmd, portcullis.Marker)
 	assert.Equal(t, "/tmp", result.ModifiedInput["cwd"], "untouched keys are preserved")
+}
+
+// requestContextWith mirrors the layout of Anthropic's persisted
+// conversation context: a baseline system block plus an update whose
+// turn-scoped text is replayed verbatim on every later request.
+func requestContextWith(transient string) json.RawMessage {
+	return json.RawMessage(`{"v":1,"baseline":{"system":[{"type":"text","text":"You are helpful"}],"tools":[{"name":"shell","input_schema":{"type":"object","maximum":9007199254740993}}]},"update":{"add_tools":["shell"],"transient":["` + transient + `"]}}`)
+}
+
+// TestRedactSecretsBeforeLLMCallScrubsProviderRequestContext: a secret
+// that only survives in ProviderState.RequestContext (the visible fields
+// are clean) is still a rewrite. The signed raw Content is left alone
+// and the caller's message keeps its plaintext state.
+func TestRedactSecretsBeforeLLMCallScrubsProviderRequestContext(t *testing.T) {
+	t.Parallel()
+
+	secret := fakeGitHubPAT()
+	rawContent := json.RawMessage(`[{"type":"text","text":"ok","signature":"` + secret + `"}]`)
+	original := chat.Message{
+		Role:    chat.MessageRoleAssistant,
+		Content: "ok",
+		ProviderState: &chat.ProviderState{
+			Provider:       "anthropic",
+			Content:        rawContent,
+			ContentHash:    "h",
+			RequestContext: requestContextWith("the token is " + secret),
+		},
+	}
+	in := &hooks.Input{HookEventName: hooks.EventBeforeLLMCall, Messages: []chat.Message{original}}
+
+	out, err := redactSecrets(t.Context(), in, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out, "a request-context hit must produce a rewrite")
+	rewritten := out.HookSpecificOutput.UpdatedMessages
+	require.Len(t, rewritten, 1)
+
+	state := rewritten[0].ProviderState
+	require.NotNil(t, state)
+	assert.NotContains(t, string(state.RequestContext), secret)
+	assert.Contains(t, string(state.RequestContext), portcullis.Marker)
+	assert.Equal(t, "anthropic", state.Provider)
+	assert.Equal(t, "h", state.ContentHash)
+	assert.Equal(t, rawContent, state.Content, "signed raw content must be left untouched")
+
+	var cc struct {
+		Version  int `json:"v"`
+		Baseline struct {
+			System []struct{ Text string } `json:"system"`
+			Tools  []json.RawMessage       `json:"tools"`
+		} `json:"baseline"`
+		Update struct {
+			AddTools  []string `json:"add_tools"`
+			Transient []string `json:"transient"`
+		} `json:"update"`
+	}
+	require.NoError(t, json.Unmarshal(state.RequestContext, &cc))
+	assert.Equal(t, 1, cc.Version)
+	assert.Equal(t, "You are helpful", cc.Baseline.System[0].Text)
+	assert.Equal(t, []string{"shell"}, cc.Update.AddTools)
+	require.Len(t, cc.Update.Transient, 1)
+	assert.Equal(t, "the token is "+portcullis.Marker, cc.Update.Transient[0])
+	assert.Contains(t, string(cc.Baseline.Tools[0]), "9007199254740993", "numbers must survive the rewrite exactly")
+
+	assert.Contains(t, string(in.Messages[0].ProviderState.RequestContext), secret,
+		"the stored session message must not be mutated")
+	assert.NotSame(t, in.Messages[0].ProviderState, rewritten[0].ProviderState)
+}
+
+// TestRedactSecretsBeforeLLMCallScrubsCompactionRequestContext: the
+// compaction summary carries its own request baseline; it is scrubbed
+// while the opaque block and the summary text stay as they were.
+func TestRedactSecretsBeforeLLMCallScrubsCompactionRequestContext(t *testing.T) {
+	t.Parallel()
+
+	secret := fakeGitHubPAT()
+	block := json.RawMessage(`{"type":"compaction","content":"opaque"}`)
+	original := chat.Message{
+		Role:    chat.MessageRoleUser,
+		Content: chat.SummaryMessageContent("summary"),
+		Compaction: &chat.CompactionResult{
+			Summary:        "summary",
+			Block:          block,
+			Provider:       "anthropic",
+			RequestContext: requestContextWith(secret),
+		},
+	}
+	in := &hooks.Input{HookEventName: hooks.EventBeforeLLMCall, Messages: []chat.Message{original}}
+
+	out, err := redactSecrets(t.Context(), in, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	rewritten := out.HookSpecificOutput.UpdatedMessages
+	require.Len(t, rewritten, 1)
+
+	c := rewritten[0].Compaction
+	require.NotNil(t, c)
+	assert.NotContains(t, string(c.RequestContext), secret)
+	assert.Contains(t, string(c.RequestContext), portcullis.Marker)
+	assert.Equal(t, block, c.Block)
+	assert.Equal(t, "summary", c.Summary)
+	assert.Equal(t, original.Content, rewritten[0].Content)
+	assert.Contains(t, string(in.Messages[0].Compaction.RequestContext), secret,
+		"the stored session message must not be mutated")
+}
+
+// TestRedactSecretsBeforeLLMCallKeepsCleanRequestContextBytes: a clean
+// request log is neither rewritten nor re-encoded, and malformed bytes
+// pass through so the provider keeps ignoring them.
+func TestRedactSecretsBeforeLLMCallKeepsCleanRequestContextBytes(t *testing.T) {
+	t.Parallel()
+
+	for name, raw := range map[string]json.RawMessage{
+		"clean":     requestContextWith("remember to be brief"),
+		"malformed": json.RawMessage(`{"v":1,`),
+		"empty":     nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			in := &hooks.Input{
+				HookEventName: hooks.EventBeforeLLMCall,
+				Messages: []chat.Message{{
+					Role:          chat.MessageRoleAssistant,
+					Content:       "ok",
+					ProviderState: &chat.ProviderState{Provider: "anthropic", RequestContext: raw},
+				}},
+			}
+
+			out, err := redactSecrets(t.Context(), in, nil)
+			require.NoError(t, err)
+			assert.Nil(t, out, "clean request context ⇒ nil Output")
+		})
+	}
 }

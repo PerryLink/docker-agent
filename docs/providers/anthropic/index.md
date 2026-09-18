@@ -108,15 +108,15 @@ models:
 
 ## Thinking Budget
 
-Anthropic accepts either an integer token budget or a string effort value. Thinking is off unless you set `thinking_budget`; when set, interleaved thinking is auto-enabled.
+Anthropic accepts either an integer token budget or a string effort value. When `thinking_budget` is unset, the model keeps its API default (thinking is on by default on Sonnet 5 and Opus 5, and always on for Fable/Mythos). Explicit budgets enable interleaved thinking. A disabled budget is sent as `thinking: disabled` where supported; always-thinking models use low effort instead. Sampling settings are omitted on models that reject them.
 
-**Token budget** (1024–32768; works on all extended-thinking Claude models):
+**Token budget** (1024–32768 on models that accept manual extended thinking):
 
 ```yaml
 models:
   claude-deep:
     provider: anthropic
-    model: claude-sonnet-5
+    model: claude-sonnet-4-5
     thinking_budget: 16384 # must be < max_tokens
 ```
 
@@ -135,7 +135,7 @@ models:
     thinking_budget: high # low | medium | high | xhigh | max (same as adaptive/<effort>)
 ```
 
-On models that reject token-based thinking (Opus 4.6, 4.7, 4.8, Sonnet 4.6), an integer budget is automatically coerced to `adaptive` with a logged warning. See the [Thinking / Reasoning guide](../../guides/thinking/index.md) for the full cross-provider reference.
+On models that reject token-based thinking (Opus 4.6+, Sonnet 5, Fable and Mythos), an integer budget is automatically coerced to `adaptive` with a logged warning. See the [Thinking / Reasoning guide](../../guides/thinking/index.md) for the full cross-provider reference.
 
 ## Interleaved Thinking
 
@@ -216,6 +216,104 @@ Fallback models receive the exact same request as the primary model
 models that accept the same request shape. Not available on Bedrock, Vertex
 AI, or the Message Batches API.
 
+## Native Compaction
+
+Set `native_compaction` in `provider_opts` to let the Claude API compact the
+conversation server-side instead of running the LLM summarization strategy:
+
+```yaml
+models:
+  sonnet:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    provider_opts:
+      native_compaction: true
+```
+
+Compaction sends the assembled conversation, current tools and stored instructions,
+and replaces the whole history with a signed compaction block. This first
+implementation is synchronous and compacts the whole history: it does not run
+in the background or preserve a recent tail. Legacy per-call hook extras are
+not included in the compaction snapshot; they are applied again on the next
+normal turn. The block is persisted alongside a readable summary; the
+Anthropic provider replays the block on later requests (including after a model
+switch), while other providers receive the readable text.
+
+- The compaction request goes through the same `before_llm_call` hooks and
+  message transforms as a regular model call, so builtins such as
+  `redact_secrets` apply to it.
+- Editing the summary afterwards — through a hook rewrite or a manual edit —
+  disables replay of the block; the edited text is sent instead.
+- The option is explicit: a model that does not support native compaction
+  fails compaction with an error rather than silently falling back to the LLM
+  strategy, and a `compaction_model` pointing at another model is rejected.
+
+Uses `compact-2026-09-04` on the Claude API; not available on Bedrock or
+Vertex AI. Summarization uses the conversation model and charges its normal
+rates. Compaction usage is read from `usage.iterations`. An incomplete, unsigned
+or failed response never replaces the stored history. Compact before exceeding
+the model's context window.
+
+## Cache-Preserving Updates
+
+Anthropic hashes the request prefix in order: `tools`, then `system`, then
+`messages`. Any change to the system prompt, the tool list or the top-level
+`output_config.effort` therefore invalidates the prompt cache for the whole
+conversation. Set `cache_preserving_updates` in `provider_opts` to express
+those changes as
+[mid-conversation system messages](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages)
+instead:
+
+```yaml
+models:
+  opus:
+    provider: anthropic
+    model: claude-opus-5
+    provider_opts:
+      cache_preserving_updates: true
+```
+
+The first request of a conversation fixes a baseline: its `system` blocks,
+`tools` and effort. Later requests resend that baseline byte for byte and
+append a `role: system` message after the last user turn carrying only what
+changed since:
+
+- system blocks appended to the prompt become `text` blocks;
+- tools that disappear or reappear become `tool_removal` / `tool_addition`
+  blocks (the full definitions stay in `tools`); a tool never seen before is
+  declared at the end of `tools` with `defer_loading: true` and surfaced by a
+  `tool_addition`;
+- an effort change becomes a per-message `output_config.effort` on Claude
+  Opus 5, Fable 5.1 and Mythos 5.1;
+- per-call system extras (environment information, prompt files and hook
+  reminders) become text-only, turn-scoped system messages. They remain in
+  history verbatim but stop applying at the next user turn. If the prompt ends
+  with an assistant turn, reminders stay top-level instead of using an invalid
+  system-message position.
+
+Each assistant reply records the update that preceded it, so the next request
+replays every update at its original position and the cached prefix keeps
+matching. The record travels with the session (`provider_state.request_context`)
+and survives reloads, message edits and native compaction. Baselines persist
+system instructions and tool schemas in the session store; treat session
+exports with the same care as your configuration and conversation history.
+
+Changes that have no cache-preserving form restart the baseline from the
+current request (one cache miss, logged as a warning) rather than keeping stale
+instructions in effect: a system block rewritten or removed, a tool definition
+edited, an effort reset to the model default, or an effort change on Opus 4.8 / Fable 5. Only append-only system
+prompt changes are expressed as updates.
+
+Docker Agent attaches the `mid-conversation-tool-changes-2026-07-01`,
+`mid-conversation-output-config-2026-07-01` and
+`mid-conversation-system-clear-at-2026-08-21` beta headers only on requests
+that actually carry a tool change, a per-message effort or a turn-scoped
+reminder.
+
+Supported on Claude Opus 4.8, Opus 5, Fable 5, Fable 5.1, Mythos 5 and
+Mythos 5.1 (and their server-side fallbacks); Sonnet 5 and older models are
+rejected at configuration time. Fallback models must also support the request's per-message effort features. The option requires the Beta Messages API.
+
 ## Thinking Display
 
 Controls whether thinking blocks are returned in responses when thinking is enabled. Newer Claude models (Opus 4.7+, Fable 5) hide thinking content by default (`omitted`); Docker Agent counters this by requesting `summarized` thinking whenever an adaptive/effort-based budget is used without an explicit `thinking_display`, so reasoning stays visible in the UI. Set `thinking_display` in `provider_opts` to override:
@@ -234,9 +332,58 @@ Valid values:
 
 - `summarized`: thinking blocks are returned with summarized thinking text (Docker Agent's default for adaptive/effort-based budgets).
 - `display`: thinking blocks are returned for display. Only accepted by pre-4.6 token-thinking models (e.g. Sonnet 4.5, Haiku 4.5); models from the adaptive-thinking generation onward (Opus/Sonnet 4.6+, Sonnet 5, Fable 5) reject it, and Docker Agent fails fast with a configuration error instead of sending a request the API would refuse.
+- `updates`: short progress updates between tool calls, with reasoning text omitted. Available on Fable 5/5.1 and Mythos 5.1; automatically enables `thinking-display-updates-2026-08-18`. No explicit budget is required, and an unset effort keeps the model default. Other models (including configured fallbacks) are rejected locally.
 - `omitted`: thinking blocks are returned with an empty thinking field; the signature is still returned for multi-turn continuity. Useful to reduce time-to-first-text-token when streaming.
 
 Note: `thinking_display` applies to both `thinking_budget` with token counts and adaptive/effort-based budgets. For token-count budgets no default is applied (the API already defaults to `summarized`). Full thinking tokens are billed regardless of the `thinking_display` value.
 
 > [!NOTE]
 > Anthropic thinking budget values below 1024 or greater than or equal to `max_tokens` are ignored (a warning is logged).
+
+## Preserved Thinking Compatibility
+
+Docker Agent preserves the original ordered assistant content blocks, including
+multiple thinking blocks, omitted thinking, redacted thinking and their signatures.
+A hook or user edit invalidates raw replay so stale content cannot override it.
+
+On Fable 5.1/Mythos 5.1, Docker Agent defaults to
+`thinking.block_binding.prefix_mismatch_behavior: drop_block`: when earlier
+history changes, the API drops invalidated thinking instead of rejecting the
+request. Dropped blocks are reported in logs. To enforce append-only history
+strictly, set `provider_opts.thinking_prefix_mismatch: error`. You can explicitly
+select `drop_block` on other supported Claude models too. Both modes attach
+`thinking-binding-controls-2026-08-01`; neither repairs corrupted signatures.
+
+## Strict Tool Arguments
+
+Set `provider_opts.strict_tools: true` to enable strict argument generation for
+compatible tool schemas, or use a list such as `strict_tools: [read_file]` to
+require strict mode for named tools present in the request. Names absent from
+an agent's toolset are ignored because model configurations can be shared.
+
+- Boolean mode leaves incompatible tools non-strict and logs the reason at debug level.
+- Named mode fails before sending a request if a selected tool is incompatible.
+- Schemas are not rewritten: optional properties remain optional; object schemas
+  must already set `additionalProperties: false`.
+- The eligibility check is conservative (for example, regex patterns and recursive
+  references are left non-strict). Limits cover 20 strict tools, 24 optional
+  parameters and 16 union parameters, including a configured JSON output schema.
+
+Strict arguments are separate from structured JSON responses. Normal requests
+without `strict_tools` retain their existing tool schema representation.
+
+## Cache Diagnostics
+
+Set `provider_opts.cache_diagnostics: true` to enable Claude API cache diagnostics
+(`cache-diagnosis-2026-04-07`). Docker Agent sends the preceding Anthropic response
+ID from this conversation and records the diagnosis alongside the reply. Debug
+logs report the reason; misses with a token count also produce a runtime warning.
+Reasons include changed instructions, tools, messages or model, and an unavailable
+previous request. A null/pending diagnosis is not reported as a miss.
+
+IDs and request state belong to the conversation, not the provider client, so
+parallel sessions cannot borrow one another's cache history. Diagnostics are not
+available on Bedrock or Vertex AI.
+
+See [`examples/anthropic-context.yaml`](https://github.com/docker/docker-agent/blob/main/examples/anthropic-context.yaml)
+for a combined configuration.

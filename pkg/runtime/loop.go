@@ -965,6 +965,12 @@ func (r *LocalRuntime) runTurn(
 	usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 	usage.LastMessage = msgUsage
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usage))
+	if res.ProviderState != nil && res.ProviderState.CacheDiagnostics != nil {
+		d := res.ProviderState.CacheDiagnostics
+		if d.MissedInputTokens > 0 {
+			events.Emit(Warning(fmt.Sprintf("Prompt cache miss: %s (%d input tokens).", d.Reason, d.MissedInputTokens), a.Name()))
+		}
+	}
 	if shouldWarnOnCacheMiss(sess, msgUsage) {
 		events.Emit(Warning("This agent turn did not use the prompt cache.", a.Name()))
 	}
@@ -1307,6 +1313,8 @@ func (r *LocalRuntime) recordAssistantMessage(
 		Cost:              messageCost,
 		FinishReason:      res.FinishReason,
 	}
+	// Sealed after name sanitization so the hash reflects what is persisted.
+	assistantMessage.AttachProviderState(res.ProviderState)
 
 	if len(res.Media) > 0 {
 		mediaParts := r.materializeGeneratedMedia(ctx, sess, res.Media, a.Name(), events)

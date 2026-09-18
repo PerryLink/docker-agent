@@ -61,3 +61,17 @@ func TestDeferralTrackerIgnoresUnactivatedCatalog(t *testing.T) {
 	assert.True(t, activated[0].Deferred)
 	assert.Equal(t, "add-call", activated[0].DeferredAtToolCallID)
 }
+
+func TestDeferralTrackerReset(t *testing.T) {
+	t.Parallel()
+	var tracker DeferralTracker
+	tracker.Mark("one", []Tool{{Name: "read"}})
+	tracker.Mark("two", []Tool{{Name: "read"}})
+	late := []Tool{{Name: "read"}, {Name: "search"}}
+	require.True(t, tracker.MarkAt("one", "old-call", late)[1].Deferred)
+	require.True(t, tracker.MarkAt("two", "other-call", late)[1].Deferred)
+	tracker.Reset("one")
+	assert.False(t, tracker.MarkAt("one", "new-call", late)[1].Deferred)
+	assert.True(t, tracker.MarkAt("two", "new-call", late)[1].Deferred)
+	tracker.Reset("missing")
+}

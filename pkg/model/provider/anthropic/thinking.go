@@ -18,6 +18,7 @@ const (
 	thinkingDisplaySummarized = "summarized"
 	thinkingDisplayOmitted    = "omitted"
 	thinkingDisplayDisplay    = "display"
+	thinkingDisplayUpdates    = "updates"
 )
 
 // noThinkingMinOutputTokens is the minimum output-token budget enforced when
@@ -148,7 +149,16 @@ func validThinkingTokens(tokens, maxTokens int64) (int64, bool) {
 // downstream code keeps treating them as "thinking off".
 func (c *Client) resolveThinkingBudget() *latest.ThinkingBudget {
 	budget := c.ModelConfig.ThinkingBudget
-	if budget == nil || budget.IsDisabled() {
+	if budget == nil {
+		if checksThinkingPrefix(c.ModelConfig.Model) || c.progressUpdatesEnabled() {
+			return &latest.ThinkingBudget{Effort: "adaptive"}
+		}
+		return nil
+	}
+	if budget.IsDisabled() {
+		if requiresThinking(c.ModelConfig.Model) {
+			return &latest.ThinkingBudget{Effort: "adaptive/low"}
+		}
 		return budget
 	}
 
@@ -169,7 +179,7 @@ func (c *Client) resolveThinkingBudget() *latest.ThinkingBudget {
 	}
 
 	// Token budget. Only coerce a real, positive value.
-	if budget.Tokens <= 0 || !modelinfo.RejectsTokenThinking(c.ModelConfig.Model) {
+	if budget.Tokens <= 0 || (!modelinfo.RejectsTokenThinking(c.ModelConfig.Model) && !usesDefaultThinking(c.ModelConfig.Model)) {
 		return budget
 	}
 	slog.Warn("Anthropic: model rejects token-based thinking budgets; switching to adaptive thinking",
@@ -246,10 +256,12 @@ func anthropicThinkingDisplay(opts map[string]any) (string, bool) {
 		return thinkingDisplayOmitted, true
 	case thinkingDisplayDisplay:
 		return thinkingDisplayDisplay, true
+	case thinkingDisplayUpdates:
+		return thinkingDisplayUpdates, true
 	default:
 		slog.Warn("Anthropic provider_opts: invalid thinking_display value, ignoring",
 			"value", s,
-			"valid_values", []string{thinkingDisplaySummarized, thinkingDisplayOmitted, thinkingDisplayDisplay})
+			"valid_values", []string{thinkingDisplaySummarized, thinkingDisplayOmitted, thinkingDisplayDisplay, thinkingDisplayUpdates})
 		return "", false
 	}
 }
@@ -263,13 +275,19 @@ func anthropicThinkingDisplay(opts map[string]any) (string, bool) {
 // first request.
 func validateThinkingDisplay(cfg *latest.ModelConfig) error {
 	display, ok := anthropicThinkingDisplay(cfg.ProviderOpts)
-	if !ok || display != thinkingDisplayDisplay {
+	if !ok || (display != thinkingDisplayDisplay && display != thinkingDisplayUpdates) {
 		return nil
 	}
 	// Read fallbacks directly (not via fallbackModels) to avoid its
 	// "enabling server-side fallbacks" debug log during validation.
 	fallbacks, _ := providerutil.GetProviderOptStringSlice(cfg.ProviderOpts, "fallbacks")
 	for _, model := range append([]string{cfg.Model}, fallbacks...) {
+		if display == thinkingDisplayUpdates {
+			if !supportsProgressUpdates(model) {
+				return fmt.Errorf("anthropic: model %q does not support thinking_display: updates", model)
+			}
+			continue
+		}
 		if !modelinfo.SupportsFullThinkingDisplay(model) {
 			return fmt.Errorf("anthropic: model %q does not support thinking_display: %q; use %q or %q",
 				model, thinkingDisplayDisplay, thinkingDisplaySummarized, thinkingDisplayOmitted)
@@ -298,6 +316,10 @@ func defaultAdaptiveDisplay(display string) string {
 func (c *Client) applyThinkingConfig(params *anthropic.MessageNewParams, maxTokens int64) bool {
 	budget := c.resolveThinkingBudget()
 	if budget == nil {
+		return usesDefaultThinking(c.ModelConfig.Model)
+	}
+	if budget.IsDisabled() {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &anthropic.ThinkingConfigDisabledParam{}}
 		return false
 	}
 	display, _ := anthropicThinkingDisplay(c.ModelConfig.ProviderOpts)
@@ -308,7 +330,9 @@ func (c *Client) applyThinkingConfig(params *anthropic.MessageNewParams, maxToke
 			Display: anthropic.ThinkingConfigAdaptiveDisplay(display),
 		}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: adaptive}
-		params.OutputConfig.Effort = anthropic.OutputConfigEffort(effortStr)
+		if c.ModelConfig.ThinkingBudget != nil {
+			params.OutputConfig.Effort = anthropic.OutputConfigEffort(effortStr)
+		}
 		slog.Debug("Anthropic API using adaptive thinking", "effort", effortStr, "display", display)
 		return true
 	}
@@ -332,7 +356,14 @@ func (c *Client) applyBetaThinkingConfig(params *anthropic.BetaMessageNewParams,
 	if budget == nil {
 		return
 	}
+	if budget.IsDisabled() {
+		params.Thinking = anthropic.BetaThinkingConfigParamUnion{OfDisabled: &anthropic.BetaThinkingConfigDisabledParam{}}
+		return
+	}
 	display, _ := anthropicThinkingDisplay(c.ModelConfig.ProviderOpts)
+	if display == thinkingDisplayUpdates {
+		params.Betas = append(params.Betas, anthropic.AnthropicBetaThinkingDisplayUpdates2026_08_18)
+	}
 
 	if effortStr, ok := anthropicThinkingEffort(budget); ok {
 		display = defaultAdaptiveDisplay(display)
@@ -340,7 +371,9 @@ func (c *Client) applyBetaThinkingConfig(params *anthropic.BetaMessageNewParams,
 			Display: anthropic.BetaThinkingConfigAdaptiveDisplay(display),
 		}
 		params.Thinking = anthropic.BetaThinkingConfigParamUnion{OfAdaptive: adaptive}
-		params.OutputConfig.Effort = anthropic.BetaOutputConfigEffort(effortStr)
+		if c.ModelConfig.ThinkingBudget != nil {
+			params.OutputConfig.Effort = anthropic.BetaOutputConfigEffort(effortStr)
+		}
 		slog.Debug("Anthropic Beta API using adaptive thinking", "effort", effortStr, "display", display)
 		return
 	}
@@ -354,4 +387,9 @@ func (c *Client) applyBetaThinkingConfig(params *anthropic.BetaMessageNewParams,
 		params.Thinking.OfEnabled.Display = anthropic.BetaThinkingConfigEnabledDisplay(display)
 	}
 	slog.Debug("Anthropic Beta API using thinking_budget", "budget_tokens", tokens, "display", display)
+}
+
+func (c *Client) progressUpdatesEnabled() bool {
+	display, _ := anthropicThinkingDisplay(c.ModelConfig.ProviderOpts)
+	return display == thinkingDisplayUpdates
 }

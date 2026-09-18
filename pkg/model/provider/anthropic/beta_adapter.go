@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -22,6 +23,10 @@ type betaStreamAdapter struct {
 	// See streamAdapter.toolIDByBlock for the same rationale (parallel
 	// tool calls require per-block routing of input_json deltas).
 	toolIDByBlock map[int64]string
+	// message/rawLost: see streamAdapter.
+	message        anthropic.BetaMessage
+	rawLost        bool
+	requestContext json.RawMessage
 }
 
 // newBetaStreamAdapter creates a new Beta stream adapter
@@ -41,6 +46,7 @@ func (a *betaStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 	}
 
 	event := a.stream.Current()
+	a.accumulate(event)
 
 	response := chat.MessageStreamResponse{
 		ID:     event.Message.ID,
@@ -108,10 +114,35 @@ func (a *betaStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 			response.Usage = betaUsageFromDelta(eventVariant.Usage)
 		}
 	case anthropic.BetaRawMessageStopEvent:
+		for _, dropped := range thinkingTransformations(a.message.InputTransformations) {
+			slog.Warn("Anthropic dropped invalidated thinking", "block", dropped)
+		}
 		response.Choices[0].FinishReason = finishReason(anthropic.StopReason(a.stopReason), a.toolCall)
+		if !a.rawLost {
+			response.Choices[0].Delta.ProviderState = newProviderState(a.message.ID, a.message.Content)
+		}
+		state := withRequestContext(response.Choices[0].Delta.ProviderState, a.requestContext)
+		diagnosis := cacheDiagnostics(a.message.Diagnostics)
+		if state == nil && diagnosis != nil {
+			state = &chat.ProviderState{Provider: providerStateName, MessageID: a.message.ID, Content: json.RawMessage("[]")}
+		}
+		if state != nil {
+			state.CacheDiagnostics = diagnosis
+		}
+		response.Choices[0].Delta.ProviderState = state
 	}
 
 	return response, nil
+}
+
+func (a *betaStreamAdapter) accumulate(event anthropic.BetaRawMessageStreamEventUnion) {
+	if a.rawLost {
+		return
+	}
+	if err := a.message.Accumulate(event); err != nil {
+		a.rawLost = true
+		slog.Debug("Anthropic Beta: raw response capture disabled", "error", err)
+	}
 }
 
 // Close closes the Beta stream
