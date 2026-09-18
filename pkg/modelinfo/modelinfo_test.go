@@ -194,6 +194,26 @@ func TestSupportsDeferredTools(t *testing.T) {
 	}
 }
 
+func TestSupportsHostedToolSearch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		provider string
+		model    string
+		want     bool
+	}{
+		{"openai", "gpt-5.4", true},
+		{"OpenAI ", "gpt-6-astra", true},
+		{"openai", "gpt-5.2", false},
+		{"chatgpt", "gpt-5.4", false},
+		{"custom", "gpt-5.4", false},
+		{"anthropic", "claude-opus-4-5", false},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, SupportsHostedToolSearch(tc.provider, tc.model), "%s/%s", tc.provider, tc.model)
+	}
+}
+
 func TestUsesReasoningEffort(t *testing.T) {
 	t.Parallel()
 
@@ -1045,4 +1065,17 @@ func TestResolveCaps_OverrideAudioVideo(t *testing.T) {
 	mc3 := ResolveCaps(t.Context(), store, modelsdev.NewID("google", "gemini-2.5-pro"), nil)
 	assert.True(t, mc3.SupportsAudio())
 	assert.True(t, mc3.SupportsVideo())
+}
+
+func TestHostedToolSearchSnapshots(t *testing.T) {
+	t.Parallel()
+	for model, want := range map[string]bool{
+		"gpt-5.6":                 true,
+		"gpt-5.4-2026-03-05":      true,
+		"gpt-5.6-sol-2026-07-09":  true,
+		"gpt-5.4-nano-2026-03-17": false,
+		"gpt-5.4-not-a-snapshot":  false,
+	} {
+		assert.Equal(t, want, SupportsHostedToolSearch("openai", model), model)
+	}
 }

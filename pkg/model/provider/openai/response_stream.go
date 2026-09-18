@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
@@ -23,6 +24,10 @@ var _ responseEventStream = (*ssestream.Stream[responses.ResponseStreamEventUnio
 type ResponseStreamAdapter struct {
 	stream         responseEventStream
 	trackUsage     bool
+	responseState  *chat.OpenAIResponse
+	preserveOutput bool
+	responseItems  map[int64]json.RawMessage
+	onResponseDone func(responses.Response)
 	itemCallIDMap  map[string]string
 	itemHasContent map[string]bool
 	// outputIndexHasContent mirrors itemHasContent keyed by output_index.
@@ -304,6 +309,12 @@ func (a *ResponseStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 		slog.Debug("Reasoning summary part event", "type", event.Type, "item_id", event.ItemID)
 
 	case "response.output_item.done":
+		if a.preserveOutput && replayableResponseItem(event.Item) && event.JSON.OutputIndex.Valid() {
+			if a.responseItems == nil {
+				a.responseItems = make(map[int64]json.RawMessage)
+			}
+			a.responseItems[event.OutputIndex] = responseItemJSON(event.Item)
+		}
 		// Tool call or message item is complete
 		itemID := cmp.Or(event.ItemID, event.Item.ID)
 		slog.Debug("Output item done", "item_id", itemID, "type", event.Item.Type)
@@ -399,7 +410,7 @@ func (a *ResponseStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 			"output_items", len(event.Response.Output),
 			"output_tokens", event.Response.Usage.OutputTokens,
 			"reasoning_tokens", event.Response.Usage.OutputTokensDetails.ReasoningTokens,
-			"response_raw", event.Response.RawJSON(),
+			"response_raw", redactEncryptedContent([]byte(event.Response.RawJSON())),
 		)
 		u := event.Response.Usage
 		if u.TotalTokens > 0 {
@@ -427,9 +438,41 @@ func (a *ResponseStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 
 	default:
 		slog.Info("Unhandled stream event type", "type", event.Type)
-		slog.Debug("Unhandled stream event payload", "type", event.Type, "raw", event.RawJSON())
+		slog.Debug("Unhandled stream event payload", "type", event.Type, "raw", redactEncryptedContent([]byte(event.RawJSON())))
 	}
 
+	if a.responseState != nil && (event.Type == "response.completed" || event.Type == "response.done" || event.Type == "response.incomplete") {
+		state := a.responseState.Clone()
+		state.ID = event.Response.ID
+		if a.preserveOutput && len(event.Response.Output) > 0 {
+			for i, item := range event.Response.Output {
+				// Some terminal snapshots omit encrypted reasoning returned by item.done.
+				if raw := a.responseItems[int64(i)]; item.Type == "reasoning" && item.EncryptedContent == "" && len(raw) > 0 {
+					state.Output = append(state.Output, raw)
+					continue
+				}
+				if replayableResponseItem(item) {
+					state.Output = append(state.Output, responseItemJSON(item))
+				}
+			}
+		} else {
+			indices := make([]int64, 0, len(a.responseItems))
+			for index := range a.responseItems {
+				indices = append(indices, index)
+			}
+			slices.Sort(indices)
+			for _, index := range indices {
+				state.Output = append(state.Output, a.responseItems[index])
+			}
+		}
+		if len(response.Choices) == 0 {
+			response.Choices = []chat.MessageStreamChoice{{}}
+		}
+		response.Choices[0].Delta.OpenAIResponse = state
+	}
+	if a.onResponseDone != nil && (event.Type == "response.completed" || event.Type == "response.done") {
+		a.onResponseDone(event.Response)
+	}
 	return response, nil
 }
 

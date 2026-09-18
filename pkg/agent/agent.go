@@ -435,7 +435,23 @@ func (a *Agent) Cache() *cache.Cache {
 // Tools returns the tools available to this agent
 func (a *Agent) Tools(ctx context.Context) ([]tools.Tool, error) {
 	a.ensureToolSetsAreStarted(ctx)
-	return a.collectTools(ctx)
+	return a.collectTools(ctx, false)
+}
+
+// ToolsWithCatalog is Tools plus every started [tools.Catalog] toolset's
+// catalog, marked [tools.Tool.InCatalog], for providers with hosted tool
+// search. Catalogs are read from the toolsets directly, not through
+// composites such as Code Mode, whose children stay reachable only through
+// the composite's own tool. Dedup follows Tools: a regular tool from another
+// toolset wins over a same-named catalog tool, while the catalog toolset's
+// own regular listing of a catalog tool (e.g. one activated through
+// add_tool) is marked InCatalog in place so the native declaration never
+// changes with activation state, yet stays a regular tool for providers
+// without hosted search. Catalog tools no toolset lists are also marked
+// [tools.Tool.SearchOnly].
+func (a *Agent) ToolsWithCatalog(ctx context.Context) ([]tools.Tool, error) {
+	a.ensureToolSetsAreStarted(ctx)
+	return a.collectTools(ctx, true)
 }
 
 // StartedTools returns tools only from toolsets that have already been started,
@@ -443,7 +459,7 @@ func (a *Agent) Tools(ctx context.Context) ([]tools.Tool, error) {
 // notifications (e.g. MCP tool list changes) that should not block on slow
 // toolset startup such as RAG file indexing.
 func (a *Agent) StartedTools(ctx context.Context) ([]tools.Tool, error) {
-	return a.collectTools(ctx)
+	return a.collectTools(ctx, false)
 }
 
 // collectTools gathers tools from all started toolsets plus static tools.
@@ -453,17 +469,27 @@ func (a *Agent) StartedTools(ctx context.Context) ([]tools.Tool, error) {
 // the first toolset in configuration order wins, as documented in the MCP
 // toolset docs. Each collision is surfaced to the user once per streak via
 // reportCollisions. See #2251.
-func (a *Agent) collectTools(ctx context.Context) ([]tools.Tool, error) {
+func (a *Agent) collectTools(ctx context.Context, withCatalog bool) ([]tools.Tool, error) {
 	var agentTools []tools.Tool
-	origins := make(map[string]string)
+	// origins maps each kept tool name to the index of the toolset that
+	// contributed it; staticOrigin stands for the agent's static tools.
+	staticOrigin := len(a.toolsets)
+	origins := make(map[string]int)
 	collisions := make(map[string]string)
 
-	collect := func(candidates []tools.Tool, origin string) {
+	describe := func(origin int) string {
+		if origin == staticOrigin {
+			return "agent static tools"
+		}
+		return tools.DescribeToolSet(a.toolsets[origin])
+	}
+	collect := func(candidates []tools.Tool, origin int) {
 		for _, tool := range candidates {
 			if firstOrigin, exists := origins[tool.Name]; exists {
-				collisions[collisionKey(tool.Name, firstOrigin, origin)] = fmt.Sprintf(
+				kept, ignored := describe(firstOrigin), describe(origin)
+				collisions[collisionKey(tool.Name, kept, ignored)] = fmt.Sprintf(
 					"duplicate tool %q: kept from %s, ignored from %s (first toolset in config wins) — set a unique 'name:' on the MCP toolset or use its 'tools:' filter to disambiguate",
-					tool.Name, firstOrigin, origin,
+					tool.Name, kept, ignored,
 				)
 				continue
 			}
@@ -510,12 +536,36 @@ func (a *Agent) collectTools(ctx context.Context) ([]tools.Tool, error) {
 			}
 			continue
 		}
-		collect(ta, tools.DescribeToolSet(toolSet))
+		collect(ta, i)
 	}
 
-	collect(a.tools, "agent static tools")
+	collect(a.tools, staticOrigin)
 
 	a.reportCollisions(ctx, collisions)
+
+	if withCatalog {
+		for i, toolSet := range a.toolsets {
+			catalog, ok := tools.As[tools.Catalog](toolSet)
+			if !ok || !results[i].started || results[i].err != nil {
+				continue
+			}
+			catalogTools, err := catalog.CatalogTools(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("%s catalog: %w", describe(i), err)
+			}
+			for _, tool := range catalogTools {
+				switch origin, exists := origins[tool.Name]; {
+				case !exists:
+					tool.InCatalog, tool.SearchOnly = true, true
+					origins[tool.Name] = i
+					agentTools = append(agentTools, tool)
+				case origin == i:
+					idx := slices.IndexFunc(agentTools, func(t tools.Tool) bool { return t.Name == tool.Name })
+					agentTools[idx].InCatalog = true
+				}
+			}
+		}
+	}
 
 	if a.addDescriptionParameter {
 		agentTools = tools.AddDescriptionParameter(agentTools)

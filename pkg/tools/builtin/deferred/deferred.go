@@ -1,10 +1,12 @@
 package deferred
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -39,6 +41,7 @@ var (
 	_ tools.ToolSet      = (*ToolSet)(nil)
 	_ tools.Instructable = (*ToolSet)(nil)
 	_ tools.Named        = (*ToolSet)(nil)
+	_ tools.Catalog      = (*ToolSet)(nil)
 )
 
 type deferredSource struct {
@@ -141,9 +144,11 @@ func (d *ToolSet) snapshotPendingSources(ctx context.Context) {
 	}
 }
 
-// deferredTools returns the not-yet-activated deferred tools across all
-// listed sources, first source winning on duplicate names.
-func (d *ToolSet) deferredTools(ctx context.Context) map[string]tools.Tool {
+// deferredTools returns the deferred tools across all listed sources, first
+// source winning on duplicate names. Activated tools are skipped unless
+// includeActivated: search_tool offers only what add_tool can still activate,
+// while the catalog covers every deferred tool regardless of activation.
+func (d *ToolSet) deferredTools(ctx context.Context, includeActivated bool) map[string]tools.Tool {
 	d.snapshotPendingSources(ctx)
 
 	d.mu.RLock()
@@ -152,7 +157,7 @@ func (d *ToolSet) deferredTools(ctx context.Context) map[string]tools.Tool {
 	result := make(map[string]tools.Tool)
 	for _, source := range d.sources {
 		for _, tool := range source.snapshot {
-			if _, active := d.activatedTools[tool.Name]; active {
+			if _, active := d.activatedTools[tool.Name]; active && !includeActivated {
 				continue
 			}
 			if _, exists := result[tool.Name]; !exists {
@@ -163,10 +168,18 @@ func (d *ToolSet) deferredTools(ctx context.Context) map[string]tools.Tool {
 	return result
 }
 
+// CatalogTools implements tools.Catalog: every deferred tool, handlers
+// included and activated or not, sorted by name so requests stay byte-stable.
+func (d *ToolSet) CatalogTools(ctx context.Context) ([]tools.Tool, error) {
+	catalog := slices.Collect(maps.Values(d.deferredTools(ctx, true)))
+	slices.SortFunc(catalog, func(a, b tools.Tool) int { return cmp.Compare(a.Name, b.Name) })
+	return catalog, nil
+}
+
 func (d *ToolSet) handleSearchTool(ctx context.Context, args SearchToolArgs) (*tools.ToolCallResult, error) {
 	queryRunes := []rune(strings.ToLower(strings.TrimSpace(args.Query)))
 
-	deferredTools := d.deferredTools(ctx)
+	deferredTools := d.deferredTools(ctx, false)
 
 	type scoredDeferredTool struct {
 		result SearchToolResult

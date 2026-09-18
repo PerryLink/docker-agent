@@ -759,6 +759,7 @@ func (s *Session) snapshotItems() []Item {
 // cloneChatMessage returns a deep copy of a chat.Message, duplicating
 // all slice and pointer fields that would otherwise alias the original.
 func cloneChatMessage(m chat.Message) chat.Message {
+	m.OpenAIResponse = m.OpenAIResponse.Clone()
 	if m.MultiContent != nil {
 		orig := m.MultiContent
 		m.MultiContent = make([]chat.MessagePart, len(orig))

@@ -311,6 +311,7 @@ func (e *fallbackExecutor) execute(
 			if e.prepareMessages != nil {
 				attemptMessages = e.prepareMessages(ctx, sess, a, modelEntry.provider, messages)
 			}
+			attemptTools := toolsForProvider(ctx, modelEntry.provider, agentTools)
 
 			// Check context before each attempt
 			if ctx.Err() != nil {
@@ -360,7 +361,7 @@ func (e *fallbackExecutor) execute(
 
 			// Count only requests that reach the provider dispatch boundary.
 			fbSpan.IncrementAttempt()
-			stream, err := modelEntry.provider.CreateChatCompletionStream(streamCtx, attemptMessages, agentTools)
+			stream, err := modelEntry.provider.CreateChatCompletionStream(streamCtx, attemptMessages, attemptTools)
 			if err != nil {
 				streamCancel(nil)
 				lastErr = err
@@ -387,7 +388,7 @@ func (e *fallbackExecutor) execute(
 				}
 			}
 
-			res, err := handleStream(streamCtx, streamCancel, stream, a, agentTools, sess, m, e.telemetry, events, defaultStreamIdleTimeout)
+			res, err := handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, m, e.telemetry, events, defaultStreamIdleTimeout)
 			streamCancel(nil) // always release the child context
 			if err != nil {
 				lastErr = err
@@ -423,9 +424,9 @@ func (e *fallbackExecutor) execute(
 
 					streamCtx, streamCancel = context.WithCancelCause(ctx)
 					fbSpan.IncrementAttempt()
-					stream, err = modelEntry.provider.CreateChatCompletionStream(streamCtx, attemptMessages, agentTools)
+					stream, err = modelEntry.provider.CreateChatCompletionStream(streamCtx, attemptMessages, attemptTools)
 					if err == nil {
-						res, err = handleStream(streamCtx, streamCancel, stream, a, agentTools, sess, m, e.telemetry, events, defaultStreamIdleTimeout)
+						res, err = handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, m, e.telemetry, events, defaultStreamIdleTimeout)
 					}
 					streamCancel(nil)
 					if err == nil {

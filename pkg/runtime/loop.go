@@ -867,6 +867,7 @@ func (r *LocalRuntime) runTurn(
 	}
 
 	if usedModel != nil {
+		agentTools = toolsForProvider(ctx, usedModel, agentTools)
 		if usedModel.ID() != modelID {
 			slog.InfoContext(ctx, "Used fallback model", "agent", a.Name(), "primary", modelID.String(), "used", usedModel.ID().String())
 			modelID = usedModel.ID()
@@ -1286,6 +1287,7 @@ func (r *LocalRuntime) recordAssistantMessage(
 		ReasoningContent:  res.ReasoningContent,
 		ThinkingSignature: res.ThinkingSignature,
 		ThoughtSignature:  res.ThoughtSignature,
+		OpenAIResponse:    res.OpenAIResponse,
 		ToolCalls:         calls,
 		ToolDefinitions:   toolDefs,
 		CreatedAt:         r.now().Format(time.RFC3339),
@@ -1644,7 +1646,8 @@ func (r *LocalRuntime) getTools(ctx context.Context, sess *session.Session, a *a
 		defer func() { events.Emit(MCPInitFinished(a.Name())) }()
 	}
 
-	agentTools, err := a.Tools(ctx)
+	// Catalog tools ride through the same session filters below.
+	agentTools, err := listAgentTools(ctx, a)
 	if err == nil {
 		agentTools = filterExcludedTools(agentTools, sess.ExcludedTools)
 		agentTools = r.skillSubSessionTools(ctx, sess, a, agentTools)
