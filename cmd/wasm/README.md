@@ -21,8 +21,36 @@ cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/wasm/web/wasm_exec.js
 ```
 
 The output is a large `.wasm` (the runtime, the YAML parser, three LLM
-provider clients and the MCP client). With `-ldflags="-s -w"` plus
-`wasm-opt` you can roughly halve it; we have not optimised the size.
+provider clients, RAG and the MCP client). Size depends on the toolchain
+and optional providers; compression and `-ldflags="-s -w"` can reduce transfer
+size. No size-reduction ratio is guaranteed.
+
+### Optional cloud providers
+
+The default binary keeps the original OpenAI / Anthropic / Gemini API set;
+a `google` model with `project`, `location`, `publisher` or
+`GOOGLE_GENAI_USE_VERTEXAI` is rejected at session creation.
+To include Bedrock, Vertex AI and explicitly configured Docker Model Runner:
+
+```sh
+GOOS=js GOARCH=wasm go build -tags docker_agent_wasm_cloud \
+  -o cmd/wasm/web/docker-agent.wasm ./cmd/wasm
+```
+
+- **Bedrock:** supply `AWS_BEARER_TOKEN_BEDROCK` (or the model's `token_key`)
+  in the session `env`. AWS profiles, assume-role and metadata discovery are
+  unavailable. Bearer authentication requires HTTPS.
+- **Vertex AI:** supply `GOOGLE_OAUTH_ACCESS_TOKEN` (or `token_key`) and
+  project/location. Gemini and Model Garden use the token without ADC or
+  host credential files. Tokens are session inputs; the host must obtain
+  fresh credentials and recreate the session when they expire.
+- **DMR:** set an explicit HTTP(S) `base_url`. No CLI/socket discovery or
+  model auto-pull runs. The provider still attempts its normal model
+  configuration request at creation.
+
+These providers still require CORS-enabled endpoints or a provider proxy;
+`toolProxy` only routes SSRF-guarded tool traffic, not model requests.
+See `examples/cloud-bedrock.yaml` and `examples/cloud-vertex.yaml`.
 
 ## Run (Node)
 
@@ -39,6 +67,20 @@ node --test cmd/wasm/node/bridge_test.js
 
 Both Node scripts load `web/docker-agent.wasm` through `node/boot.js`, which
 picks `wasm_exec.js` from `go env GOROOT` (or `$GOROOT`).
+
+## Browser integration test
+
+```sh
+task test-wasm-browser
+# Other Chrome installations:
+CHROME_BIN=/path/to/chrome task test-wasm-browser
+```
+
+Requires Chrome and `openssl`; no npm dependencies. The runner starts local
+mock model and HTTPS proxy servers, tests real browser streaming, tools,
+RAG, approval, cancellation and proxy redirects, then removes its temporary
+profile and certificate. It does not contact model services. This validates
+Chromium; Safari and Firefox are not covered.
 
 ## Run (browser, with OpenRouter sign-in)
 
@@ -177,6 +219,9 @@ the original method, body and credentials. It must enforce destination IP
 policy and **must not follow redirects**. Relay target redirects with the same
 status, move `Location` to `X-Docker-Agent-Location`, and expose that header
 through CORS. Go then enforces the caller's redirect and credential policies.
+The fetch sends no cookies (`credentials: "omit"`); the proxy must strip the
+headers the browser adds on its own — `Cookie`, `Origin`, `Referer`, `Host` —
+before forwarding, so the target only sees the request the tool built.
 Only configure infrastructure you trust with the target credentials.
 
 The session handle:
@@ -312,9 +357,9 @@ documents is rejected when the session is created.
   one error.
 - **Providers**: OpenAI (all API variants), Anthropic and Google, registered
   in `providers.go`. The shared core registry is empty on every platform.
-  Bedrock and Vertex AI also cross-compile, but are not registered here;
-  cloud credentials and browser transport require additional configuration.
-  Docker Model Runner discovery needs the host CLI.
+  Bedrock, Vertex AI and explicit-URL DMR are opt-in with
+  `docker_agent_wasm_cloud` (see above). Host credential discovery is not
+  available in a browser.
 - **No persistence**: sessions live in memory for the lifetime of the tab;
   todos, plans, memories, RAG indexes and MCP OAuth tokens are per-session,
   in memory.
@@ -336,6 +381,7 @@ documents is rejected when the session is created.
 | `providers.go` | Explicit demo provider registry (OpenAI / Anthropic / Google). |
 | `examples/` | Configs that run unchanged in the browser and in the CLI. |
 | `node/` | Node loader and JS bridge tests. |
+| `browser/` | Headless Chrome integration tests using real fetch and local mock services. |
 
 The shims that make the tree compile under `GOOS=js GOARCH=wasm` are
 intentionally tiny (`pkg/cache/lock_js.go`, `pkg/userconfig/lock_js.go`,
