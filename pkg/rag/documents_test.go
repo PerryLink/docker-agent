@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"maps"
 	"path/filepath"
@@ -196,7 +197,7 @@ func TestDocumentsSelection(t *testing.T) {
 		"root":         {docs: "[.]", wantPaths: []string{"notes/todo.md", "pets/cats.md", "pets/dogs.md"}},
 		"glob":         {docs: "['**/*.md']", wantPaths: []string{"notes/todo.md", "pets/cats.md", "pets/dogs.md"}},
 		"per strategy": {docs: "[]", wantPaths: []string{"notes/todo.md"}},
-		"missing":      {docs: "[pets/birds.md]", wantErr: `"/pets/birds.md" selects none of the supplied documents [notes/todo.md pets/cats.md pets/dogs.md]`},
+		"missing":      {docs: "[pets/birds.md]", wantErr: fmt.Sprintf("%q selects none of the supplied documents [notes/todo.md pets/cats.md pets/dogs.md]", filepath.FromSlash("/pets/birds.md"))},
 		"bad glob":     {docs: "['pets/[']", wantErr: "invalid glob pattern"},
 	} {
 		t.Run(name, func(t *testing.T) {
