@@ -125,6 +125,7 @@ func TestRealFocusEventsOverrideStaleStartupProbe(t *testing.T) {
 
 func TestRootFocusPausesTicksWithoutDroppingRuntimeEvents(t *testing.T) {
 	root, _, _ := wallClockRoot(t, 120, 40)
+	before := root.View().Content
 	_, _ = root.Update(tea.BlurMsg{})
 	_, _ = root.Update(messages.RoutedMsg{SessionID: "profile", Inner: agentruntime.StreamStarted("profile", "root")})
 	require.True(t, root.activeTab.chatPage.IsWorking())
@@ -132,10 +133,11 @@ func TestRootFocusPausesTicksWithoutDroppingRuntimeEvents(t *testing.T) {
 	assert.Nil(t, root.ar.Continue())
 	assert.Nil(t, root.ar.EnsureRunning())
 	_, _ = root.Update(messages.RoutedMsg{SessionID: "profile", Inner: agentruntime.AgentChoice("root", "profile", "hidden stream still progresses")})
-	assert.Contains(t, ansi.Strip(root.View().Content), "hidden stream still progresses")
+	assert.Equal(t, before, root.View().Content, "streaming must not compose a blurred frame")
 	assert.Zero(t, root.ar.Now())
 
 	_, cmd := root.Update(tea.FocusMsg{})
+	assert.Contains(t, ansi.Strip(root.View().Content), "hidden stream still progresses")
 	msgs := collectMsgs(cmd)
 	require.True(t, hasMsg[animation.TickMsg](msgs))
 	for _, msg := range msgs {

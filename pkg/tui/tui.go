@@ -169,9 +169,11 @@ type appModel struct {
 
 	// Exact root view cache. Unchanged accepted ticks return this complete value,
 	// preserving metadata and function fields as well as content.
-	viewCache      tea.View
-	viewCacheValid bool
-	hasPointer     bool
+	viewCache            tea.View
+	viewCacheValid       bool
+	viewCacheInitialized bool
+	renderDeferred       bool // Defer composition after blur, but keep processing events.
+	hasPointer           bool
 
 	// Window state
 	wWidth, wHeight int
@@ -741,6 +743,8 @@ func (m *appModel) autoThemeInitCmd() tea.Cmd {
 // theme enabled it, so the terminal stops sending color-scheme reports
 // after exit.
 func (m *appModel) quitCmd() tea.Cmd {
+	// Bubble Tea leaves the final frame in scrollback in lean mode.
+	m.renderDeferred = false
 	if !m.lightDarkModeSet {
 		return tea.Quit
 	}
@@ -1000,6 +1004,8 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.imageWriter.Invalidate()
 		}
 		m.wWidth, m.wHeight = msg.Width, msg.Height
+		// Reusing the old geometry can push stale lean-mode lines into scrollback.
+		m.viewCacheInitialized = false
 		cmd := m.handleWindowResize(msg.Width, msg.Height)
 		return m, cmd
 
@@ -1018,12 +1024,14 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.BlurMsg:
 		m.focusEventReceived = true
+		m.renderDeferred = true
 		m.focused = false
 		m.ar.Pause()
 		return m, nil
 
 	case tea.FocusMsg:
 		m.focusEventReceived = true
+		m.renderDeferred = false
 		// Filter spurious FocusMsg: RestoreTerminal re-enables focus
 		// reporting which delivers a FocusMsg even when we never blurred.
 		if m.focused {
@@ -2939,9 +2947,20 @@ func (m *appModel) View() tea.View {
 	if m.viewCacheValid {
 		return m.viewCache
 	}
+	if m.renderDeferred && m.viewCacheInitialized && m.err == nil {
+		// Keep completion signals live without composing the hidden transcript.
+		view := m.viewCache
+		view.WindowTitle = m.windowTitle()
+		view.ProgressBar = nil
+		if m.activeTab.chatPage.IsWorking() {
+			view.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
+		}
+		return view
+	}
 	view := m.composeView()
 	m.viewCache = view
 	m.viewCacheValid = true
+	m.viewCacheInitialized = true
 	return view
 }
 
