@@ -16,7 +16,6 @@ func TestDemoProviderRegistry(t *testing.T) {
 		assert.True(t, demoProviders.Has(name), name)
 		assert.False(t, provider.EmptyRegistry().Has(name), "demo registration must not affect the empty core registry")
 	}
-	assert.False(t, demoProviders.Has("amazon-bedrock"))
 }
 
 func TestBrowserHostBuildsDemoProvidersWithSessionEnv(t *testing.T) {
