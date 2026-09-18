@@ -67,7 +67,8 @@ type VectorStore struct {
 
 	similarityMetric string
 
-	indexingTokens int64 // Track tokens used during indexing
+	usageMu        sync.Mutex // Protects the indexing counters; files are indexed concurrently
+	indexingTokens int64      // Track tokens used during indexing
 	indexingCost   float64
 
 	modelID     modelsdev.ID // Provider/model identity, used for pricing lookup.
@@ -202,14 +203,17 @@ func (s *VectorStore) recordUsage(tokens int64, cost float64) {
 		return
 	}
 
+	s.usageMu.Lock()
 	s.indexingTokens += tokens
 	s.indexingCost += cost
+	totalTokens, totalCost := s.indexingTokens, s.indexingCost
+	s.usageMu.Unlock()
 
 	// Emit usage event with CUMULATIVE totals for TUI
 	s.emitEvent(types.Event{
 		Type:        types.EventTypeUsage,
-		TotalTokens: s.indexingTokens,
-		Cost:        s.indexingCost,
+		TotalTokens: totalTokens,
+		Cost:        totalCost,
 	})
 }
 
@@ -395,12 +399,13 @@ func (s *VectorStore) Initialize(ctx context.Context, docPaths []string, chunkin
 
 	s.emitEvent(types.Event{Type: types.EventTypeIndexingComplete})
 
+	totalTokens, totalCost := s.GetIndexingUsage()
 	slog.InfoContext(ctx, "Vector store initialization completed",
 		"name", s.name,
 		"total_files", len(files),
 		"indexed", indexed,
-		"total_tokens", s.indexingTokens,
-		"total_cost", s.indexingCost)
+		"total_tokens", totalTokens,
+		"total_cost", totalCost)
 
 	return nil
 }
@@ -533,6 +538,8 @@ func (s *VectorStore) Close() error {
 
 // GetIndexingUsage returns usage statistics from indexing
 func (s *VectorStore) GetIndexingUsage() (tokens int64, cost float64) {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
 	return s.indexingTokens, s.indexingCost
 }
 
