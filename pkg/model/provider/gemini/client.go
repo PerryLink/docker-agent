@@ -454,7 +454,11 @@ func extractMimeType(dataURLPrefix string) string {
 
 // BuildConfig creates GenerateContentConfig from model config.
 func (c *Client) buildConfig() *genai.GenerateContentConfig {
-	config := &genai.GenerateContentConfig{}
+	// Set before the NoThinking early return so every request (chat, rerank,
+	// title, compaction) is billed on the same tier.
+	config := &genai.GenerateContentConfig{
+		ServiceTier: genai.ServiceTier(serviceTier(c.ModelConfig.ProviderOpts)),
+	}
 	if c.ModelConfig.MaxTokens != nil {
 		config.MaxOutputTokens = int32(*c.ModelConfig.MaxTokens) //nolint:gosec // user-configured token count; realistic values fit in int32
 	}

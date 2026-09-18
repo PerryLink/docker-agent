@@ -218,6 +218,7 @@ remote MCP endpoints.
 | [`structured-output.yaml`](structured-output.yaml) | Forces the model to return JSON matching a schema. |
 | [`google_search_grounding.yaml`](google_search_grounding.yaml) | Enables Google Search grounding on Gemini models. |
 | [`openai-service-tier.yaml`](openai-service-tier.yaml) | OpenAI Fast mode and service tier selection with `provider_opts.service_tier`. |
+| [`gemini_service_tier.yaml`](gemini_service_tier.yaml) | Gemini Flex/standard/priority service tier selection with `provider_opts.service_tier`. |
 | [`gemini_image_output.yaml`](gemini_image_output.yaml) | Gemini image-output model: generated images are saved into the workspace, stored portably with the session, and rendered inline in the TUI. |
 | [`sampling-opts.yaml`](sampling-opts.yaml) | Provider-specific sampling parameters (`top_k`, `repetition_penalty`, …). |
 | [`thinking_budget.yaml`](thinking_budget.yaml) | Reasoning/thinking budgets across OpenAI, Anthropic and Google. |

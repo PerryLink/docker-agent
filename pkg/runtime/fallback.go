@@ -379,7 +379,8 @@ func (e *fallbackExecutor) execute(
 				}
 			}
 
-			res, err := handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, events, defaultStreamIdleTimeout)
+			idleTimeout := streamIdleTimeoutFor(modelEntry.provider)
+			res, err := handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, events, idleTimeout)
 			streamCancel(nil) // always release the child context
 			if err != nil {
 				lastErr = err
@@ -417,7 +418,7 @@ func (e *fallbackExecutor) execute(
 					fbSpan.IncrementAttempt()
 					stream, err = modelEntry.provider.CreateChatCompletionStream(streamCtx, attemptMessages, attemptTools)
 					if err == nil {
-						res, err = handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, events, defaultStreamIdleTimeout)
+						res, err = handleStream(streamCtx, streamCancel, stream, a, attemptTools, sess, events, idleTimeout)
 					}
 					streamCancel(nil)
 					if err == nil {
