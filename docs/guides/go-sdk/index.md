@@ -694,9 +694,9 @@ The wrapper receives the already-instrumented transport (OpenTelemetry, SSE deco
 **Supported providers:** Anthropic, OpenAI, Gemini (GeminiAPI backend), Bedrock. Works in both direct and gateway/proxy mode.
 
 > [!WARNING]
-> **Vertex AI not supported**
+> **Vertex AI authentication**
 >
-> Vertex AI uses an ADC-managed HTTP client that Docker Agent cannot intercept. When a transport wrapper is set, Docker Agent falls back to the GeminiAPI backend instead of Vertex AI — a debug message is logged.
+> Gemini on Vertex AI supports transport wrappers when `options.WithTokenSource` supplies the access token. Without an explicit token source, a wrapper selects the Gemini API backend instead of the ADC-managed Vertex client. For Model Garden, use `vertexai.NewClientWithTokenSource` (or `anthropic/vertex.NewClientWithTokenSource`) to bypass ADC and resolve credentials with each request's context.
 
 In **gateway mode** the wrapper is called on every LLM request because gateway clients are rebuilt each call for short-lived auth tokens. In **direct mode** it is called once at client construction. Rate-limit responses (HTTP 429) are classified as non-retryable by the runtime and cause the model chain to skip to the next fallback, so wrappers that track per-request outcomes will observe these as failures rather than retried calls.
 
@@ -725,7 +725,7 @@ client, err := openai.NewClient(ctx, &latest.ModelConfig{
 }, env, options.WithTokenSource(tokenSource))
 ```
 
-The OpenAI client checks for a configured `TokenSource` before falling back to `token_key`, and uses it to set the `Authorization` header on both HTTP and WebSocket requests. Static API-key, ChatGPT, and gateway auth paths are unaffected. `FromModelOptions` round-trips the token source, so a cloned provider config keeps it. Vertex AI Model Garden uses this option internally to refresh GCP access tokens through the standard `oauth2.TokenSource` machinery.
+The OpenAI client checks for a configured `TokenSource` before falling back to `token_key`, and uses it to set the `Authorization` header on both HTTP and WebSocket requests. Static API-key, ChatGPT, and gateway auth paths are unaffected. `FromModelOptions` round-trips the token source, so a cloned provider config keeps it. Vertex AI Model Garden's default constructor refreshes GCP access tokens through ADC. Its `NewClientWithTokenSource` constructor instead accepts a host-managed request-time token source; neither host credential files nor instance metadata are consulted on that path.
 
 ## Using Different Providers
 
