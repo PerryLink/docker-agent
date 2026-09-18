@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -14,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go/auth/bearer"
 
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -36,17 +36,6 @@ type Client struct {
 	cachingSupported bool // Cached at init time for efficiency
 }
 
-// bearerTokenTransport adds Authorization header with bearer token to requests
-type bearerTokenTransport struct {
-	token string
-	base  http.RoundTripper
-}
-
-func (t *bearerTokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Authorization", "Bearer "+t.token)
-	return t.base.RoundTrip(req)
-}
-
 func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider, opts ...options.Opt) (*Client, error) {
 	if cfg == nil {
 		slog.ErrorContext(ctx, "Bedrock client creation failed", "error", "model configuration is required")
@@ -63,8 +52,9 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	// Check for bearer token
 	// Bearer token is optional: if not provided, falls back to standard AWS credential chain (SigV4).
 	//
-	// NOTE: Manual token handling is required because aws-sdk-go-v2's default credential chain
-	// does not recognize bearer tokens for Bedrock API keys.
+	// NOTE: The default credential chain does not recognize Bedrock API keys; the
+	// token is wired explicitly, the way the SDK handles AWS_BEARER_TOKEN_BEDROCK
+	// in the process environment.
 	// See: https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html
 	var bearerToken string
 	if cfg.TokenKey != "" {
@@ -80,15 +70,6 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	// Build the docker-agent HTTP client (OTel instrumentation, SSE decompression,
 	// Desktop proxy support) so transport-level concerns apply to Bedrock too.
 	httpClient := httpclient.NewHTTPClient(ctx)
-
-	// If a bearer token is set, chain it on top of the base transport so auth
-	// headers are injected without replacing the rest of the transport stack.
-	if bearerToken != "" {
-		httpClient.Transport = &bearerTokenTransport{
-			token: bearerToken,
-			base:  httpClient.Transport,
-		}
-	}
 
 	// Apply the transport wrapper, if registered, over the full chain.
 	globalOptions.WrapTransport(ctx, httpClient)
@@ -110,18 +91,21 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		})
 	}
 
-	// Inject our HTTP client (which carries OTel, SSE, bearer token if set, and
-	// any caller-registered transport wrapper) into the Bedrock runtime options.
+	// Inject our HTTP client (which carries OTel, SSE, and any caller-registered
+	// transport wrapper) into the Bedrock runtime options.
+	clientOpts = append(clientOpts, func(o *bedrockruntime.Options) {
+		o.HTTPClient = httpClient
+	})
 	if bearerToken != "" {
 		slog.DebugContext(ctx, "Bedrock using bearer token authentication")
 		clientOpts = append(clientOpts, func(o *bedrockruntime.Options) {
-			// Use anonymous credentials to skip SigV4 signing
+			// Anonymous credentials disable SigV4; the bearer scheme must then be
+			// preferred with a real provider, or the SDK selects it with a nil one.
 			o.Credentials = aws.AnonymousCredentials{}
-			o.HTTPClient = httpClient
-		})
-	} else {
-		clientOpts = append(clientOpts, func(o *bedrockruntime.Options) {
-			o.HTTPClient = httpClient
+			o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(context.Context) (bearer.Token, error) {
+				return bearer.Token{Value: bearerToken}, nil
+			})
+			o.AuthSchemePreference = []string{"httpBearerAuth"}
 		})
 	}
 
