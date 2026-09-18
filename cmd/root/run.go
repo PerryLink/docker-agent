@@ -991,8 +991,8 @@ func (f *runExecFlags) createLocalRuntimeAndSession(ctx context.Context, loadRes
 			sess.HideToolResults = req.HideToolResults
 
 			// Apply any stored model overrides from the session
-			if len(sess.AgentModelOverrides) > 0 && localRt.SupportsModelSwitching() {
-				for agentName, modelRef := range sess.AgentModelOverrides {
+			if overrides, _ := sess.ModelStateSnapshot(); len(overrides) > 0 && localRt.SupportsModelSwitching() {
+				for agentName, modelRef := range overrides {
 					if err := localRt.SetAgentModel(ctx, agentName, modelRef); err != nil {
 						slog.WarnContext(ctx, "Failed to apply stored model override", "agent", agentName, "model", modelRef, "error", err)
 					}

@@ -515,9 +515,9 @@ func (a *App) CurrentAgentModel(ctx context.Context) string {
 		return a.currentAgentModel
 	}
 	// Fallback to session overrides
-	if a.session != nil && a.session.AgentModelOverrides != nil {
+	if a.session != nil {
 		agentName := a.runtime.CurrentAgentName(ctx)
-		if modelRef, ok := a.session.AgentModelOverrides[agentName]; ok {
+		if modelRef, ok := a.session.AgentModelOverride(agentName); ok {
 			return modelRef
 		}
 	}
@@ -1547,23 +1547,11 @@ func (a *App) SetCurrentAgentModel(ctx context.Context, modelRef string) error {
 		return err
 	}
 
-	// Update the session's model overrides
+	a.session.SetAgentModelOverride(agentName, modelRef)
 	if modelRef == "" {
-		// Clear the override - remove from map
-		delete(a.session.AgentModelOverrides, agentName)
 		slog.DebugContext(ctx, "Cleared model override from session", "session_id", a.session.ID, "agent", agentName)
 	} else {
-		// Set the override
-		if a.session.AgentModelOverrides == nil {
-			a.session.AgentModelOverrides = make(map[string]string)
-		}
-		a.session.AgentModelOverrides[agentName] = modelRef
 		slog.DebugContext(ctx, "Set model override in session", "session_id", a.session.ID, "agent", agentName, "model", modelRef)
-
-		// Track custom models (inline provider/model format) in the session
-		if strings.Contains(modelRef, "/") {
-			a.trackCustomModel(modelRef)
-		}
 	}
 
 	// Persist the session
@@ -1571,7 +1559,8 @@ func (a *App) SetCurrentAgentModel(ctx context.Context, modelRef string) error {
 		if err := store.UpdateSession(ctx, a.session); err != nil {
 			return fmt.Errorf("failed to persist model override: %w", err)
 		}
-		slog.DebugContext(ctx, "Persisted session with model override", "session_id", a.session.ID, "overrides", a.session.AgentModelOverrides)
+		overrides, _ := a.session.ModelStateSnapshot()
+		slog.DebugContext(ctx, "Persisted session with model override", "session_id", a.session.ID, "overrides", overrides)
 	}
 
 	// Re-emit startup info so the sidebar updates with the new model
@@ -1648,8 +1637,9 @@ func (a *App) AvailableModels(ctx context.Context) []runtime.ModelChoice {
 	currentRef := ""
 	var customRefs []string
 	if a.session != nil {
-		currentRef = a.session.AgentModelOverrides[agentName]
-		customRefs = a.session.CustomModelsUsed
+		var overrides map[string]string
+		overrides, customRefs = a.session.ModelStateSnapshot()
+		currentRef = overrides[agentName]
 	}
 
 	runtimeStart := time.Now()
@@ -1667,21 +1657,6 @@ func (a *App) AvailableModels(ctx context.Context) []runtime.ModelChoice {
 		"agent", agentName,
 	)
 	return models
-}
-
-// trackCustomModel adds a custom model to the session's history if not already present.
-func (a *App) trackCustomModel(modelRef string) {
-	if a.session == nil {
-		return
-	}
-
-	// Check if already tracked
-	if slices.Contains(a.session.CustomModelsUsed, modelRef) {
-		return
-	}
-
-	a.session.CustomModelsUsed = append(a.session.CustomModelsUsed, modelRef)
-	slog.Debug("Tracked custom model in session", "session_id", a.session.ID, "model", modelRef)
 }
 
 // SupportsModelSwitching returns true if the runtime supports model switching.
@@ -1772,7 +1747,8 @@ func (a *App) ReplaceSession(ctx context.Context, sess *session.Session) {
 
 // applySessionModelOverrides applies any stored model overrides from a loaded session.
 func (a *App) applySessionModelOverrides(ctx context.Context, sess *session.Session) {
-	if len(sess.AgentModelOverrides) == 0 {
+	overrides, _ := sess.ModelStateSnapshot()
+	if len(overrides) == 0 {
 		slog.DebugContext(ctx, "No model overrides to apply from session", "session_id", sess.ID)
 		return
 	}
@@ -1783,8 +1759,8 @@ func (a *App) applySessionModelOverrides(ctx context.Context, sess *session.Sess
 		return
 	}
 
-	slog.DebugContext(ctx, "Applying model overrides from session", "session_id", sess.ID, "overrides", sess.AgentModelOverrides)
-	for agentName, modelRef := range sess.AgentModelOverrides {
+	slog.DebugContext(ctx, "Applying model overrides from session", "session_id", sess.ID, "overrides", overrides)
+	for agentName, modelRef := range overrides {
 		if err := a.runtime.SetAgentModel(ctx, agentName, modelRef); err != nil {
 			// Log but don't fail - the session can still be used with default models
 			slog.WarnContext(ctx, "Failed to apply model override from session", "agent", agentName, "model", modelRef, "error", err)
