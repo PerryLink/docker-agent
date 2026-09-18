@@ -196,7 +196,7 @@ models:
       google_search: true # Optional: discover sources as well as read links
 ```
 
-Then ask, for example, "Summarize https://docs.docker.com/ai/docker-agent/".
+Then ask, for example, `Summarize https://docs.docker.com/ai/docker-agent/`.
 Google fetches the content on its servers; it cannot read local files, private
 network URLs, or pages requiring your browser's authentication. The option is
 opt-in and accepts a YAML boolean, not the string `"true"`.
