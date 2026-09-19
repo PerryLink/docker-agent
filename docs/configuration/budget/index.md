@@ -39,7 +39,7 @@ budget:
 | Field | Type | Description |
 | --- | --- | --- |
 | `max_cost` | number | Maximum spend, in USD. |
-| `max_tokens` | integer | Maximum cumulative input+output tokens. |
+| `max_tokens` | integer | Maximum cumulative tokens: fresh input, cache read, cache write, and output. |
 | `max_time` | string | Maximum time the agents spend working, in Go duration format (`10m`, `30s`, `1h30m`). |
 
 ### Named budgets
@@ -182,7 +182,7 @@ This is the same granularity [`max_iterations`](../agents/index.md) has, and it 
 
 ### `max_tokens` here is not the model's `max_tokens`
 
-The `max_tokens` in a budget is a **cumulative** count of input+output tokens across the whole run. It is unrelated to the provider- or model-level [`max_tokens`](../models/index.md), which caps the output of a single response.
+The `max_tokens` in a budget is a **cumulative** count of tokens across the whole run: fresh input, cache-read input, cache-write input, and output all count towards it. It is unrelated to the provider- or model-level [`max_tokens`](../models/index.md), which caps the output of a single response.
 
 It is also not the session's context length: compaction resets that, while the budget keeps counting.
 
