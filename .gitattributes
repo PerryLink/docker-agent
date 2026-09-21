@@ -26,3 +26,8 @@
 *.zip binary
 *.tar binary
 *.gz binary
+
+# Bot-refreshed models.dev snapshot: regenerated weekly, reviewed via the
+# rendered delta in the PR body rather than a line-by-line diff.
+pkg/modelsdev/snapshot.json linguist-generated=true -diff
+pkg/modelsdev/snapshot_date.txt linguist-generated=true -diff
