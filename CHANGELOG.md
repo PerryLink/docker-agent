@@ -3,6 +3,99 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.142.0] - 2026-09-21
+
+This release adds several new features including background agent synchronization, native Anthropic compaction, expanded Gemini capabilities, OpenAI provider options, and a WebAssembly shared runtime, alongside numerous bug fixes for token accounting, streaming usage, and cost tracking.
+
+## What's New
+
+- Adds `wait_background_agents` tool that performs an all-settled join on a caller-supplied list of task IDs, waiting up to a configurable timeout and returning an ordered result array
+- Adds native Anthropic conversation compaction with replay guards and prefix mismatch controls, opt-in progress updates, strict tool argument enforcement, cache diagnostics, and request-context secret redaction
+- Adds `cache_diagnostics`, `preserve_reasoning`, and `native_tool_search` provider opts for OpenAI's Responses API
+- Adds native Gemini text embeddings support, enabling RAG use-cases on Gemini via the dedicated embeddings API
+- Adds support for Gemini service tiers via `provider_opts.service_tier`, including flex tier with extended idle timeout handling
+- Adds support for Gemini URL Context via `provider_opts.url_context: true`, allowing the model to fetch and reason over public URLs at inference time
+- Adds Docker Model Runner model metadata and context limit discovery via the `/engines/_configure` endpoint, enabling auto-compaction and context gauge support for DMR models
+- Replaces the WebAssembly bespoke event loop with the shared `embeddedchat`-backed agent runtime, adding portable tools, in-memory storage, egress proxy, session-scoped MCP OAuth token stores, and opt-in cloud provider builds
+
+## Improvements
+
+- Defers TUI frame composition while the terminal is blurred, avoiding unnecessary rendering work during unfocused sessions
+
+## Bug Fixes
+
+- Fixes deferred tail buffer not being cleared when a different assistant message becomes the active owner, preventing old content from bleeding into new message output
+- Fixes Gemini native tool-call IDs being stripped instead of preserved, and fixes tool-response name matching to prevent malformed conversation history
+- Fixes Gemini native tool-call `ProviderID` not being preserved in the WASM accumulator
+- Fixes session compaction not drawing from the session's cost or token budgets, allowing spend beyond configured ceilings
+- Fixes TUI animations continuing to run in unfocused and detached (tmux) sessions
+- Fixes empty, refused, or reasoning-only assistant responses being skipped even when the provider reported billable usage
+- Fixes OpenAI WebSocket pool allowing a single idle connection to be shared across concurrent streaming requests, which could corrupt both responses
+- Fixes concurrent map and slice access on session model-state fields (`AgentModelOverrides`, `CustomModelsUsed`) causing data races
+- Fixes unsafe concurrent `Close` and `Next`/retry calls on WebSocket and Anthropic streams
+- Fixes runtime streams being abandoned before fully drained, which could release streaming locks or turn tokens prematurely
+- Fixes cache tokens not being counted toward `max_tokens` token budgets; previously only input+output tokens were counted, allowing cache-heavy calls to bypass configured limits
+- Fixes Gemini tool-use input tokens (`ToolUsePromptTokenCount`) being dropped, understating token usage and cost
+- Fixes Anthropic streaming input token counts and cache read/write metrics being dropped because they were read from `message_delta` instead of the accumulated usage object
+- Fixes per-call telemetry costs being reported incorrectly; previously cumulative session cost was emitted before the current call was charged
+- Fixes context limits not being bounded before narrowing to int in the runtime
+- Fixes deferral state not being preserved across session reloads for tools
+- Fixes Bedrock SDK bearer authentication scheme configuration
+- Fixes concurrent indexing usage accounting in RAG
+
+## Technical Changes
+
+- Refactors external reference name and config import suffix parsing to use `strings.CutLast`
+- Simplifies test sleep-and-wait pairs using Go 1.27's `synctest.Sleep`
+- Simplifies composite literals in runtime and config packages using Go 1.27 promoted fields
+- Adds `Lint/ExclusiveStreamLease` analyzer to detect shared WebSocket stream leases
+- Adds `Lint/SessionStateAccessors` cop to require session model-state accessors
+- Adds `Lint/StreamCloseSafety` cop to detect unsafe stream close access
+- Adds lint detection for abandoned runtime streams
+- Consolidates and deduplicates documentation across custom commands, thinking/task budgets, provider credentials, MCP configuration, server CLI flags, generated media, provider inheritance examples, and tool concepts
+### Pull Requests
+
+- [#4305](https://github.com/docker/docker-agent/pull/4305) - test(tui): fix ordering race in TestThemeWatcher_WatchUserTheme
+- [#4323](https://github.com/docker/docker-agent/pull/4323) - test: simplify sleep-and-wait pairs with synctest.Sleep
+- [#4324](https://github.com/docker/docker-agent/pull/4324) - refactor: simplify literals with Go 1.27 promoted fields
+- [#4325](https://github.com/docker/docker-agent/pull/4325) - refactor: parse reference names and import suffixes with strings.CutLast
+- [#4326](https://github.com/docker/docker-agent/pull/4326) - docs: update CHANGELOG.md for v1.141.0
+- [#4327](https://github.com/docker/docker-agent/pull/4327) - chore(deps): bump openai-go/v3 to v3.61.0
+- [#4328](https://github.com/docker/docker-agent/pull/4328) - fix: preserve final TUI responses across deferred message transitions
+- [#4330](https://github.com/docker/docker-agent/pull/4330) - feat: add wait_background_agents join tool
+- [#4331](https://github.com/docker/docker-agent/pull/4331) - docs: consolidate custom command documentation
+- [#4332](https://github.com/docker/docker-agent/pull/4332) - docs: consolidate thinking and task budget references
+- [#4333](https://github.com/docker/docker-agent/pull/4333) - docs: centralize provider credential reference
+- [#4334](https://github.com/docker/docker-agent/pull/4334) - docs: separate MCP and shared tool configuration references
+- [#4335](https://github.com/docker/docker-agent/pull/4335) - docs: centralize server CLI flag tables
+- [#4336](https://github.com/docker/docker-agent/pull/4336) - docs: consolidate generated media documentation
+- [#4337](https://github.com/docker/docker-agent/pull/4337) - docs: reuse provider inheritance examples
+- [#4338](https://github.com/docker/docker-agent/pull/4338) - docs: link tool concepts to the canonical catalog
+- [#4339](https://github.com/docker/docker-agent/pull/4339) - fix(gemini): preserve native tool-call IDs and fix tool-response matching
+- [#4340](https://github.com/docker/docker-agent/pull/4340) - feat(dmr): discover model metadata and context limits
+- [#4341](https://github.com/docker/docker-agent/pull/4341) - fix: report per-call costs in telemetry
+- [#4342](https://github.com/docker/docker-agent/pull/4342) - perf(tui): defer frame composition while blurred
+- [#4343](https://github.com/docker/docker-agent/pull/4343) - fix: charge compaction to shared session budgets
+- [#4344](https://github.com/docker/docker-agent/pull/4344) - fix(tui): pause animations in unfocused and detached sessions
+- [#4345](https://github.com/docker/docker-agent/pull/4345) - fix(runtime): retain costs for empty assistant responses
+- [#4346](https://github.com/docker/docker-agent/pull/4346) - fix(openai): lease WebSocket connections exclusively
+- [#4347](https://github.com/docker/docker-agent/pull/4347) - fix(app): guard session model state with an accessor cop
+- [#4348](https://github.com/docker/docker-agent/pull/4348) - feat: support Gemini service tiers
+- [#4349](https://github.com/docker/docker-agent/pull/4349) - feat: support Gemini URL Context
+- [#4350](https://github.com/docker/docker-agent/pull/4350) - feat: support native Gemini text embeddings
+- [#4352](https://github.com/docker/docker-agent/pull/4352) - fix: detect and repair unsafe stream closure
+- [#4353](https://github.com/docker/docker-agent/pull/4353) - fix: drain runtime streams before releasing turn ownership
+- [#4354](https://github.com/docker/docker-agent/pull/4354) - feat(anthropic): native compaction, progress updates, strict tools, cache diagnostics, and secret redaction
+- [#4355](https://github.com/docker/docker-agent/pull/4355) - feat(openai): add cache_diagnostics, preserve_reasoning, and native_tool_search provider opts
+- [#4357](https://github.com/docker/docker-agent/pull/4357) - feat(wasm): shared runtime, portable tools, in-memory storage, egress proxy, and cloud provider builds
+- [#4358](https://github.com/docker/docker-agent/pull/4358) - fix(runtime): count cache tokens toward token budgets
+- [#4359](https://github.com/docker/docker-agent/pull/4359) - fix: account for Gemini tool-use input tokens
+- [#4360](https://github.com/docker/docker-agent/pull/4360) - fix: preserve Anthropic streaming input and cache usage
+- [#4361](https://github.com/docker/docker-agent/pull/4361) - chore(deps): bump anyio from 4.9.0 to 4.14.2 in /examples/dhi/dhi_mcp_server in the pip group across 1 directory
+- [#4362](https://github.com/docker/docker-agent/pull/4362) - docs: auto-update for merged PRs (2026-09-19)
+- [#4367](https://github.com/docker/docker-agent/pull/4367) - docs: auto-update for merged PRs (2026-09-21)
+
+
 ## [v1.141.0] - 2026-09-16
 
 This release adds an opt-in shared plans sidebar to the TUI, delivers multiple performance improvements across session handling, tools, and filesystem operations, and fixes several bugs including lost user config updates and OpenCode session header handling.
@@ -6380,3 +6473,5 @@ This release improves the terminal user interface with better error handling and
 [v1.140.0]: https://github.com/docker/docker-agent/releases/tag/v1.140.0
 
 [v1.141.0]: https://github.com/docker/docker-agent/releases/tag/v1.141.0
+
+[v1.142.0]: https://github.com/docker/docker-agent/releases/tag/v1.142.0
