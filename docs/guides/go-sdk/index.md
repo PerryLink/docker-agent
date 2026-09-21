@@ -384,6 +384,19 @@ func main() {
 
 If you do not need persistent OAuth tokens (for example, in short-lived batch jobs or tests), omit the call and tokens will be kept in-memory for the process lifetime.
 
+### Session-scoped token stores
+
+The process-wide store (keyring-backed or in-memory) is shared by every remote MCP toolset in the process. A host that keeps several isolated sessions in one process (a server, a wasm bridge) uses `mcp.WithOAuthTokenStore` to give one session's toolsets a private store instead, so sessions never see each other's tokens:
+
+```go
+import "github.com/docker/docker-agent/pkg/tools/mcp"
+
+ctx := mcp.WithOAuthTokenStore(ctx, mcp.NewInMemoryTokenStore())
+team, err := teamloader.Load(ctx, source, runConfig, opts...)
+```
+
+The override is read by `mcp.CreateToolSet` / `mcp.Creator`, so it only takes effect for remote MCP toolsets built from that context; a nil store (or no override) falls back to the process-wide default. Passing the same context to multiple `teamloader.Load` calls shares one store across them, matching the process-wide default's behavior for a single session.
+
 ## JavaScript Command Expressions (opt-in)
 
 Slash-command instructions can embed `${...}` JavaScript expressions (`${args[0]}`, `${args.join(" ")}`, `${tool({...})}`). Evaluating them requires the goja JavaScript engine, which is deliberately kept out of `pkg/runtime`'s import graph so code-built embedders don't link it by default.
